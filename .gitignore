@@ -1,0 +1,14 @@
+# Build output: rebuilt from src/ by scripts/build.ps1.
+bin/
+
+# Machine-local state: the salted PIN hash, logs, run state, test output. Never commit.
+local/
+
+# Cached forecast the curtain reads (lives under local/; listed here too for clarity).
+weather.txt
+
+# Your copy of the config (location label, NWS grid, optional keys). Keep it out of git.
+config.json
+
+# Optional live status note, if you make one.
+STATUS.md

@@ -1,0 +1,6 @@
+{
+  "_comment": "Copy this file to config.json (which is gitignored) and set your location. 'grid' is your US National Weather Service forecast cell as gridId/gridX,gridY. Find it at https://api.weather.gov/points/<lat>,<lon> (read gridId, gridX, gridY). 'place' is just the label shown on screen. Leave 'grid' empty to show no forecast. 'wuApiKey' is where a paid Weather Underground v3 forecast key would go; it is not used yet.",
+  "grid": "",
+  "place": "Your City",
+  "wuApiKey": ""
+}
