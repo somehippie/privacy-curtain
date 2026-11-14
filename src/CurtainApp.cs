@@ -504,8 +504,12 @@ namespace ClaudeCurtain
                 EventLog.Clicks += dc;
                 if (dm > 0) EventLog.MouseMoved = true;
                 EventLog.InputMinutes++;
-                EventLog.Write("input", "physical input blocked in the last minute: " + dk + " key presses, " + dc +
-                               " mouse clicks" + (dm > 0 ? ", mouse moved" : ""));
+                string what = dk + " key presses, " + dc + " mouse clicks" + (dm > 0 ? ", mouse moved" : "");
+                EventLog.Write("input", "physical input blocked in the last minute: " + what);
+                // Awareness: ping the phone that someone is using the blocked keyboard or mouse. The Alerter
+                // collapses repeats of this kind within 30 s, so a burst is one ping; sustained use across
+                // minutes pings again each minute. Log-only and harmless when no notify hook is configured.
+                RaiseAlert("input", "someone is using the blocked keyboard or mouse (" + what + " in the last minute)");
             }
             else if (heartbeat)
             {
