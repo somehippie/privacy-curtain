@@ -206,10 +206,11 @@ namespace ClaudeCurtain
             g.SmoothingMode = SmoothingMode.AntiAlias;
 
             // Everything drifts slowly, together, so that over the hours the display stays lit nothing
-            // is burned into the panel. s.Drift advances about every 2 s; these slow, mismatched rates
-            // trace a wide Lissajous wander (x-cycle ~4 min, y-cycle ~6 min) within +/-6% of centre.
-            int dx = (int)(Math.Sin(s.Drift * 0.050) * w * 0.06);
-            int dy = (int)(Math.Cos(s.Drift * 0.037) * h * 0.06);
+            // is burned into the panel. s.Drift advances every tick (~200 ms) and the window repaints each
+            // step, so these slow, mismatched rates trace a wide Lissajous wander (x-cycle ~4 min,
+            // y-cycle ~6 min) within +/-6% of centre as a smooth sub-pixel creep rather than visible hops.
+            float dx = (float)(Math.Sin(s.Drift * 0.0050) * w * 0.06);
+            float dy = (float)(Math.Cos(s.Drift * 0.0037) * h * 0.06);
             float cx = w / 2f + dx;
             float clockY = h * 0.36f + dy;
             float titleY = h * 0.60f + dy;
@@ -558,7 +559,7 @@ namespace ClaudeCurtain
             }
             s.Bright = tick < brightUntilTick;
             s.AdminNotice = adminForeground;
-            s.Drift = tick / 10;   // advances ~every 2 s (TickMs = 200), so the drift moves smoothly
+            s.Drift = tick;   // advances every tick (TickMs = 200 ms); the window repaints each step, so the drift creeps smoothly
             if (stats != null)
             {
                 s.Stats = stats.StatsLine;
