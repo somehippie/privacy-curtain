@@ -27,7 +27,7 @@ namespace ClaudeCurtain
         public const int HookThreadHung = 13;
     }
 
-    internal enum Mode { None, Run, Watchdog, SetPin, SelfTest, Diag, Elevated, Summary }
+    internal enum Mode { None, Run, Watchdog, SetPin, SelfTest, Diag, Elevated, Summary, Preview }
 
     internal sealed class Options
     {
@@ -53,6 +53,12 @@ namespace ClaudeCurtain
         public int TestKeysAfter;
         public int TestSecureAt;      // seconds; simulate the security screen opening at this time
         public int TestSecureOnMs;    // how long the simulated security screen stays open
+        public string TestScreen;     // "WxH": lay the summary window out as if the primary monitor were this size
+        public string PreviewFile;    // --render-preview: paint the curtain into this PNG instead of showing it
+        public string TestState;      // preview only: idle, typing, wrong, cooldown, admin, bright
+        public int PreviewSeconds;    // preview only: the drift position, as seconds since the curtain started
+        public bool PreviewOverlay;   // preview only: draw the construction (grid, margins, type scale) on top
+        public bool PreviewDrift;     // preview only: plot the drift path instead of the curtain
 
         // The notify hook used for phone/desktop alerts. Empty string or "none" disables hook calls
         // (alerts are still logged). Null means "resolve the default under the user's .claude\hooks".
@@ -63,6 +69,7 @@ namespace ClaudeCurtain
         public string LastExitFile { get { return Path.Combine(LocalDir, "last-exit.json"); } }
         public string EventsFile { get { return Path.Combine(LocalDir, "events.log"); } }
         public string SummaryFile { get { return Path.Combine(LocalDir, "last-summary.txt"); } }
+        public string TimelineFile { get { return Path.Combine(LocalDir, "last-summary-timeline.txt"); } }
         public string AlertsFile { get { return Path.Combine(LocalDir, "alerts.log"); } }
 
         /// <summary>The notify hook to actually use: the explicit one, the default, or null (log only).</summary>
@@ -113,6 +120,12 @@ namespace ClaudeCurtain
                         case "--test-freeze": SplitAt(Next(args, ref i), out o.TestFreezeTarget, out o.TestFreezeAfter); break;
                         case "--test-keys": SplitAt(Next(args, ref i), out o.TestKeys, out o.TestKeysAfter); break;
                         case "--test-secure": { string ms; SplitAt(Next(args, ref i), out ms, out o.TestSecureAt); o.TestSecureOnMs = int.Parse(ms, CultureInfo.InvariantCulture); break; }
+                        case "--test-screen": o.TestScreen = Next(args, ref i); break;
+                        case "--render-preview": o.Mode = Mode.Preview; o.PreviewFile = Next(args, ref i); break;
+                        case "--test-state": o.TestState = Next(args, ref i); break;
+                        case "--preview-seconds": o.PreviewSeconds = int.Parse(Next(args, ref i), CultureInfo.InvariantCulture); break;
+                        case "--overlay": o.PreviewOverlay = true; break;
+                        case "--render-drift": o.Mode = Mode.Preview; o.PreviewDrift = true; o.PreviewFile = Next(args, ref i); break;
                         case "--notify-hook": o.NotifyHook = Next(args, ref i); break;
                         default:
                             if (o.Error == null) o.Error = "unknown argument: " + a;
@@ -194,6 +207,8 @@ namespace ClaudeCurtain
                         return Diag.ListElevated(o);
                     case Mode.Summary:
                         return SummaryView.Run(o);
+                    case Mode.Preview:
+                        return CurtainPreview.Run(o);
                 }
                 return ExitCode.Usage;
             }

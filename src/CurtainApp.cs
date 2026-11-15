@@ -230,10 +230,14 @@ namespace ClaudeCurtain
             try { Log.Write("exit: " + reason + " | " + Stats()); } catch { }
             try
             {
+                // The owner's own unlock is not "someone at the keyboard": leave the key presses of the PIN
+                // entry that unlocked out of every count. (Leaving them in would also show the PIN's length.)
+                if (reason == "pin" && gate != null) excludedKeys = gate.UnlockKeys;
                 FlushInputCounts(false);
                 string how = HowClosed(reason);
                 EventLog.Write("stop", how);
                 File.WriteAllText(options.SummaryFile, EventLog.BuildSummary(startUtc.ToLocalTime(), how));
+                try { EventLog.WriteTimeline(options.TimelineFile, startUtc, DateTime.UtcNow); } catch { }
                 // One "all clear" on a clean close, with the totals. Faults and kills skip it (and usually
                 // cannot send anyway); the next start still logs an unclean earlier ending.
                 if (alerter != null && IsCleanClose(reason))
@@ -301,7 +305,7 @@ namespace ClaudeCurtain
                     while (queue.TryPop(out code))
                     {
                         bool submit = (code & KeyQueue.FlagSubmit) != 0;
-                        if (gate.OnKey(code & 0xFF, (code & KeyQueue.FlagUp) != 0, submit, now))
+                        if (gate.OnKey(code & 0xFF, (code & KeyQueue.FlagUp) != 0, submit, (code & KeyQueue.FlagCounted) != 0, now))
                         {
                             // The hotkey fallback fires on key-down: let Enter come back up before leaving.
                             if (submit) WaitForRelease(Native.VK_RETURN, 1500);
@@ -471,6 +475,7 @@ namespace ClaudeCurtain
         private static long countedKeys;
         private static long countedClicks;
         private static long countedMoves;
+        private static long excludedKeys;   // key presses of the unlocking PIN entry, set just before the last flush
 
         private static bool IsCleanClose(string reason)
         {
@@ -495,9 +500,15 @@ namespace ClaudeCurtain
         private static void FlushInputCounts(bool heartbeat)
         {
             if (hooks == null) return;
-            long keys = hooks.KeyPresses, clicks = hooks.ButtonPresses, moves = hooks.Moves;
+            long keys = Math.Max(0, hooks.KeyPresses - excludedKeys), clicks = hooks.ButtonPresses, moves = hooks.Moves;
             long dk = keys - countedKeys, dc = clicks - countedClicks, dm = moves - countedMoves;
             countedKeys = keys; countedClicks = clicks; countedMoves = moves;
+            if (dk < 0)
+            {
+                // The PIN was typed across a minute mark, so part of it was already tallied: take it back.
+                EventLog.KeyPresses = Math.Max(0, EventLog.KeyPresses + dk);
+                dk = 0;
+            }
             if (dk > 0 || dc > 0 || dm > 0)
             {
                 EventLog.KeyPresses += dk;

@@ -55,7 +55,28 @@ namespace ClaudeCurtain
 
         public string StatsLine { get { return statsLine; } }
         public string SysLine { get { return sysLine; } }
+
+        // The same readings one by one, for the curtain's table layout.
+        private volatile string cpuText = "--", ramText = "--", netText = "--", uptimeText = "--", diskText = "";
+        public string Cpu { get { return cpuText; } }
+        public string Ram { get { return ramText; } }
+        public string Net { get { return netText; } }
+        public string UpFor { get { return uptimeText; } }
+        public string Disk { get { return diskText; } }
         public string[] Weather { get { return weather; } }
+
+        // Numbers behind the strings, and ten minutes of history, for the curtain's charts.
+        public const int HistoryLength = 600;   // one reading a second
+        private readonly float[] cpuRing = new float[HistoryLength];
+        private readonly float[] netRing = new float[HistoryLength];
+        private int ringCount, ringNext, version;
+        private double cpuNow = -1, memPct = -1, memUsed, memTotal, netDown = -1, netUp = -1, diskPct = -1, diskFree, diskTotal;
+        private long upSecs = -1;
+        private string diskName = "";
+        private volatile SysSnapshot snapshot = new SysSnapshot();
+
+        /// <summary>The latest readings as one immutable object (safe to hand to another thread).</summary>
+        public SysSnapshot Snapshot { get { return snapshot; } }
 
         /// <summary>Takes one reading. Call on a timer (about once a second). Never throws.</summary>
         public void Sample()
@@ -63,6 +84,33 @@ namespace ClaudeCurtain
             try { statsLine = BuildStats(); } catch { }
             try { sysLine = BuildSystem(); } catch { }
             try { ReadWeather(); } catch { }
+            try { Publish(); } catch { }
+        }
+
+        private void Publish()
+        {
+            cpuRing[ringNext] = (float)cpuNow;
+            netRing[ringNext] = (float)netDown;
+            ringNext = (ringNext + 1) % HistoryLength;
+            if (ringCount < HistoryLength) ringCount++;
+
+            SysSnapshot s = new SysSnapshot();
+            s.Version = ++version;
+            s.Cpu = cpuNow; s.MemPercent = memPct; s.MemUsedGb = memUsed; s.MemTotalGb = memTotal;
+            s.NetDown = netDown; s.NetUp = netUp;
+            s.DiskUsedPercent = diskPct; s.DiskFreeGb = diskFree; s.DiskTotalGb = diskTotal; s.DiskName = diskName;
+            s.UptimeSeconds = upSecs;
+            s.CpuHistory = Unroll(cpuRing);
+            s.NetHistory = Unroll(netRing);
+            snapshot = s;
+        }
+
+        private float[] Unroll(float[] ring)
+        {
+            float[] a = new float[ringCount];
+            int start = (ringNext - ringCount + HistoryLength) % HistoryLength;
+            for (int i = 0; i < ringCount; i++) a[i] = ring[(start + i) % HistoryLength];
+            return a;
         }
 
         private string BuildStats()
@@ -81,6 +129,7 @@ namespace ClaudeCurtain
                         if (busy < 0) busy = 0;
                         if (busy > 100) busy = 100;
                         cpu = ((int)Math.Round(busy)) + "%";
+                        cpuNow = busy;
                     }
                 }
                 lastIdle = idle; lastKernel = kernel; lastUser = user; haveCpu = true;
@@ -94,6 +143,7 @@ namespace ClaudeCurtain
                 double usedGb = (mem.ullTotalPhys - mem.ullAvailPhys) / 1073741824.0;
                 ram = mem.dwMemoryLoad + "% \u00b7 " + usedGb.ToString("0.0", CultureInfo.InvariantCulture) + "/" +
                       totalGb.ToString("0", CultureInfo.InvariantCulture) + " GB";
+                memPct = mem.dwMemoryLoad; memUsed = usedGb; memTotal = totalGb;
             }
 
             string net = "--";
@@ -109,10 +159,12 @@ namespace ClaudeCurtain
                     if (down < 0) down = 0;   // a counter reset or an interface going away
                     if (up < 0) up = 0;
                     net = "\u2193 " + Rate(down) + "  \u2191 " + Rate(up);
+                    netDown = down; netUp = up;
                 }
                 lastRx = rx; lastTx = tx; lastNetMs = nowMs; haveNet = true;
             }
 
+            cpuText = cpu; ramText = ram; netText = net;
             return "CPU " + cpu + "     RAM " + ram + "     Net " + net;
         }
 
@@ -149,7 +201,9 @@ namespace ClaudeCurtain
         private string BuildSystem()
         {
             long secs = (long)(Native.GetTickCount64() / 1000UL);
-            string line = "Up " + Uptime(secs);
+            uptimeText = Uptime(secs);
+            upSecs = secs;
+            string line = "Up " + uptimeText;
             try
             {
                 DriveInfo d = new DriveInfo(systemDrive);
@@ -157,8 +211,11 @@ namespace ClaudeCurtain
                 {
                     double freeGb = d.TotalFreeSpace / 1073741824.0;
                     double totalGb = d.TotalSize / 1073741824.0;
-                    line += "     " + d.Name.TrimEnd('\\') + " " + freeGb.ToString("0", CultureInfo.InvariantCulture) +
-                            " GB free of " + totalGb.ToString("0", CultureInfo.InvariantCulture);
+                    diskText = d.Name.TrimEnd('\\') + " " + freeGb.ToString("0", CultureInfo.InvariantCulture) +
+                               " GB free of " + totalGb.ToString("0", CultureInfo.InvariantCulture);
+                    diskName = d.Name.TrimEnd('\\'); diskFree = freeGb; diskTotal = totalGb;
+                    diskPct = totalGb > 0 ? 100.0 * (totalGb - freeGb) / totalGb : -1;
+                    line += "     " + diskText;
                 }
             }
             catch { }
@@ -198,5 +255,19 @@ namespace ClaudeCurtain
             }
             catch { weather = None; }
         }
+    }
+
+    /// <summary>One second's readings plus ten minutes of history. Never changed after it is published.</summary>
+    internal sealed class SysSnapshot
+    {
+        public int Version;
+        public double Cpu = -1;                     // percent busy; -1 = not known yet
+        public double MemPercent = -1, MemUsedGb, MemTotalGb;
+        public double NetDown = -1, NetUp = -1;     // bytes per second
+        public double DiskUsedPercent = -1, DiskFreeGb, DiskTotalGb;
+        public string DiskName = "";
+        public long UptimeSeconds = -1;
+        public float[] CpuHistory = new float[0];   // oldest first, one a second; negative = no reading
+        public float[] NetHistory = new float[0];   // download bytes per second, same spacing
     }
 }

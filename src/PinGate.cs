@@ -11,6 +11,7 @@ namespace ClaudeCurtain
     {
         public const int FlagUp = 0x100;      // key release (only sent for Enter)
         public const int FlagSubmit = 0x200;  // "Enter" seen through the hotkey fallback: submit right away
+        public const int FlagCounted = 0x400; // a physical key press the hooks counted as blocked
 
         private readonly int[] buffer = new int[256];
         private readonly object gate = new object();
@@ -55,6 +56,10 @@ namespace ClaudeCurtain
     /// Digits (top row or numpad) build the PIN, Backspace removes one, Esc clears, Enter submits.
     /// Submission happens when Enter is RELEASED, so no key is still held down when the curtain closes.
     /// Five wrong tries in a row cost a 30 second pause. Nothing here can lock the PIN out for longer.
+    ///
+    /// It also counts the blocked key presses that went into the entry being typed (digits, Backspace
+    /// corrections, Enter), so the owner's own successful unlock can be left out of the "blocked key
+    /// presses" tally. Wrong attempts are never left out.
     /// </summary>
     internal sealed class PinGate
     {
@@ -77,6 +82,8 @@ namespace ClaudeCurtain
         private long messageUntilMs;
         private long cooldownUntilMs;
         private int wrongStreak;
+        private int entryKeys;     // counted key presses that belong to the entry being typed
+        private int unlockKeys;    // the same, for the entry that unlocked
 
         // Read by the UI thread for display only.
         private volatile int state;
@@ -94,8 +101,22 @@ namespace ClaudeCurtain
         public int CooldownSecondsLeft { get { return cooldownLeft; } }
         public int WrongTotal { get { return wrongTotal; } }
 
-        /// <summary>Feeds one key event. Returns true when the correct PIN has just been submitted.</summary>
+        /// <summary>
+        /// How many counted key presses made up the entry that unlocked (0 until then). Only keys fed with
+        /// counted=true are included, so this never exceeds what the hooks tallied.
+        /// </summary>
+        public int UnlockKeys { get { return unlockKeys; } }
+
         public bool OnKey(int vk, bool up, bool submitNow, long nowMs)
+        {
+            return OnKey(vk, up, submitNow, false, nowMs);
+        }
+
+        /// <summary>
+        /// Feeds one key event. Returns true when the correct PIN has just been submitted. "counted" says
+        /// the hooks included this key press in their blocked-key tally.
+        /// </summary>
+        public bool OnKey(int vk, bool up, bool submitNow, bool counted, long nowMs)
         {
             Tick(nowMs);
             if (state == StateCooldown) return false;
@@ -109,6 +130,7 @@ namespace ClaudeCurtain
                 if (up) return false;
                 if (buffer.Length < MaxBuffer) buffer.Append((char)('0' + digit));
                 else overflow = true;
+                if (counted) entryKeys++;
                 lastKeyMs = nowMs;
                 enterArmed = false;
                 digits = buffer.Length;
@@ -125,10 +147,15 @@ namespace ClaudeCurtain
                 }
                 else if (buffer.Length > 0)
                 {
+                    if (counted) entryKeys++;
                     buffer.Length = buffer.Length - 1;
                     digits = buffer.Length;
                     lastKeyMs = nowMs;
-                    if (buffer.Length == 0 && state == StateTyping) state = StateIdle;
+                    if (buffer.Length == 0)
+                    {
+                        entryKeys = 0;   // back to nothing typed: the next digit starts a new entry
+                        if (state == StateTyping) state = StateIdle;
+                    }
                 }
                 enterArmed = false;
                 return false;
@@ -146,6 +173,7 @@ namespace ClaudeCurtain
                 if (!up)
                 {
                     enterArmed = buffer.Length > 0 || overflow;
+                    if (counted && enterArmed) entryKeys++;   // a held Enter repeats; each repeat was counted too
                     return false;
                 }
                 if (!enterArmed) return false;
@@ -189,6 +217,7 @@ namespace ClaudeCurtain
 
             string candidate = buffer.ToString();
             bool tooLong = overflow;
+            int keys = entryKeys;
             ClearBuffer();
 
             bool ok = false;
@@ -200,6 +229,7 @@ namespace ClaudeCurtain
             if (ok)
             {
                 wrongStreak = 0;
+                unlockKeys = keys;
                 return true;
             }
 
@@ -224,6 +254,7 @@ namespace ClaudeCurtain
             buffer.Length = 0;
             overflow = false;
             enterArmed = false;
+            entryKeys = 0;
             digits = 0;
             if (state == StateTyping) state = StateIdle;
         }

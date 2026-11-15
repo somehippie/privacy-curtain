@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Lifecycle stages work even while the PC is locked:
-    selftest smoke off kill watchdog-lost session-end close pin second-instance no-pin freeze two-minute
+    selftest smoke off kill watchdog-lost session-end close pin summary-layout second-instance no-pin freeze two-minute
 
   Desktop stages need the PC unlocked, because they take screenshots and send clicks and keys:
     capture inject pin-injected setpin
@@ -34,7 +34,7 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'curtain-common.ps1')
 
-$lifecycle = @('selftest', 'smoke', 'off', 'kill', 'watchdog-lost', 'session-end', 'close', 'pin',
+$lifecycle = @('selftest', 'smoke', 'off', 'kill', 'watchdog-lost', 'session-end', 'close', 'pin', 'summary-layout',
                'second-instance', 'no-pin', 'freeze', 'keep-awake', 'events', 'alerts', 'two-minute')
 $desktopStages = @('capture', 'inject', 'pin-injected', 'setpin')
 if (-not $Stage) { if ($Desktop) { $Stage = $desktopStages } else { $Stage = $lifecycle } }
@@ -67,6 +67,8 @@ function Stop-AnyCurtain {
 function Start-TestCurtain([int]$Seconds, [string[]]$Extra = @(), [switch]$ShowOutput) {
     Stop-AnyCurtain
     Remove-Item (Join-Path $testLocal 'last-exit.json') -Force -ErrorAction SilentlyContinue
+    # Never call the real notify hook from a test: it would raise real toasts (or phone pushes).
+    if ($Extra -notcontains '--notify-hook') { $Extra = @($Extra) + @('--notify-hook', 'none') }
     if ($ShowOutput) {
         & $on -Minutes ($Seconds / 60.0) -LocalDir $testLocal -ExtraArgs $Extra
     } else {
@@ -290,6 +292,44 @@ function Invoke-Pin {
 
     $logText = Get-Content (Join-Path $testLocal 'curtain.log') -Raw
     Add-Result $s 'the log never contains the PIN' ($logText -notmatch [regex]::Escape($script:TestPin))
+}
+
+function Invoke-SummaryLayout {
+    # Lays the "While you were away" window out for a short and a very long summary at several screen
+    # sizes (--test-screen) and checks every line is shown, nothing is clipped and the window is on
+    # screen. Sizes larger than the real monitor are skipped: Windows clamps a window to the real
+    # monitor, so they cannot be checked honestly here.
+    $s = 'summary-layout'
+    Add-Type -AssemblyName System.Windows.Forms
+    $real = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+    $exe = Join-Path $script:CurtainRoot 'bin\ClaudeCurtain.exe'
+    $dir = Join-Path $testLocal 'summary-layout'
+    $longLines = @('While you were away', 'Curtain was up for 7 h 59 min (9:33 PM to 5:33 AM). Closed by: timer.') +
+        @(1..40 | ForEach-Object { "- Event ${_}: the security screen opened and somebody pressed a long run of keys, all blocked, at 2:$('{0:d2}' -f $_) AM" }) +
+        @('Full record: scripts\curtain-log.ps1')
+    $texts = [ordered]@{
+        short = "While you were away`nCurtain was up for 11 min 10 s (9:33 PM to 9:44 PM). Closed by: PIN.`n- Keyboard: 6 key presses blocked`n- Someone touched the keyboard or mouse in 1 separate minute(s)`nFull record: scripts\curtain-log.ps1"
+        long  = ($longLines -join "`n")
+    }
+    foreach ($kind in $texts.Keys) {
+        $kindDir = Join-Path $dir $kind
+        New-Item -ItemType Directory -Force -Path $kindDir | Out-Null
+        Set-Content -Path (Join-Path $kindDir 'last-summary.txt') -Value $texts[$kind] -Encoding utf8
+        foreach ($scr in @('1280x720', '1920x1080', '2560x1440', "$($real.Width)x$($real.Height)") | Select-Object -Unique) {
+            $w, $h = $scr -split 'x' | ForEach-Object { [int]$_ }
+            if ($w -gt $real.Width -or $h -gt $real.Height) { Add-Note $s "$scr skipped (larger than this monitor)"; continue }
+            $out = Join-Path $kindDir "layout-$scr.json"
+            Remove-Item $out -Force -ErrorAction SilentlyContinue
+            $p = Start-Process $exe -PassThru -ArgumentList @('--show-summary', '--local-dir', "`"$kindDir`"",
+                                                              '--test-screen', $scr, '--out', "`"$out`"")
+            $j = Get-Json $out
+            for ($i = 0; $i -lt 30 -and -not $j; $i++) { Start-Sleep -Milliseconds 100; $j = Get-Json $out }
+            if (-not $p.HasExited) { $p.Kill(); $p.WaitForExit(2000) | Out-Null }
+            if (-not $j) { Add-Result $s "$kind summary at ${scr}: layout reported" $false; continue }
+            Add-Result $s "$kind summary at ${scr}: fits on screen, nothing clipped" ($j.fits -eq $true) "window $($j.window), scale $($j.scale)"
+            Add-Result $s "$kind summary at ${scr}: every line shown" ($j.bodyShownLines -ge $j.bodyTextLines) "$($j.bodyShownLines) of $($j.bodyTextLines) lines"
+        }
+    }
 }
 
 function Invoke-SecondInstance {
@@ -575,18 +615,29 @@ function Invoke-KeepAwake {
     $during = Get-ExecState
     Add-Result $s 'while the curtain is up, Windows is told not to sleep and not to blank the display' ($during -eq '3') "state $during"
     & $off | Out-Null
-    Start-Sleep -Milliseconds 800
-    $after = Get-ExecState
-    Add-Result $s 'the hold ends the moment the curtain closes normally' ($after -eq $before) "state $after, was $before"
+    Test-HoldReleased $s 'the hold ends the moment the curtain closes normally' $before
 
     $state = Start-TestCurtain 40
     if (-not $state) { Add-Result $s 'curtain starts again' $false; return }
     Start-Sleep -Milliseconds 800
     Stop-Process -Id $state.pid -Force
     [void](Wait-CurtainGone 6)
-    Start-Sleep -Milliseconds 500
+    Test-HoldReleased $s 'the hold also ends when the curtain process is killed' $before
+}
+
+# The state is system-wide: any process can hold its own "no sleep" request. The curtain's request is one
+# thread's, always both flags together (3), and Windows drops it whole when the process ends. So "released"
+# means: no curtain process is left and the "display stays on" flag is gone. Waits up to 3 s for the state to
+# return to what it was before; if something else still holds "no sleep" (1), that is noted, not failed.
+function Test-HoldReleased([string]$Stage, [string]$Name, [string]$Before) {
     $after = Get-ExecState
-    Add-Result $s 'the hold also ends when the curtain process is killed' ($after -eq $before) "state $after, was $before"
+    for ($i = 0; $i -lt 15 -and $after -ne $Before; $i++) { Start-Sleep -Milliseconds 200; $after = Get-ExecState }
+    $gone = @(Get-CurtainProcess).Count -eq 0
+    $display = (([int]$after -band 2) -ne 0) -and (([int]$Before -band 2) -eq 0)
+    if ($after -ne $Before -and $gone -and -not $display) {
+        Add-Note $Stage "another process held its own 'no sleep' request at that moment (state $after); the curtain's request was gone"
+    }
+    Add-Result $Stage $Name ($gone -and -not $display) "state $after, was $Before"
 }
 
 function Get-DisplayTimeout {
@@ -804,6 +855,7 @@ try {
                 'session-end'     { Invoke-SessionEnd }
                 'close'           { Invoke-Close }
                 'pin'             { Invoke-Pin }
+                'summary-layout'  { Invoke-SummaryLayout }
                 'second-instance' { Invoke-SecondInstance }
                 'no-pin'          { Invoke-NoPin }
                 'freeze'          { Invoke-Freeze }
@@ -843,6 +895,8 @@ $report = Join-Path $testLocal ("report-{0:yyyyMMdd-HHmmss}.txt" -f (Get-Date))
     "{0}  [{1}] {2}{3}" -f $mark, $_.Stage, $_.Name, $tail
 }) + '' + $summary | Set-Content -Path $report -Encoding utf8
 Write-Host "Report: $report"
+# Keep the ten newest reports; older ones are deleted so test runs never pile up.
+Get-ChildItem $testLocal -Filter 'report-*.txt' | Sort-Object Name -Descending | Select-Object -Skip 10 | Remove-Item -Force -ErrorAction SilentlyContinue
 
 if ($failed.Count -gt 0 -or $left -gt 0) { exit 1 }
 exit 0

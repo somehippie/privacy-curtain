@@ -4,7 +4,9 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
+using System.Globalization;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -17,6 +19,7 @@ namespace ClaudeCurtain
 
         public string Clock = "";
         public string Date = "";
+        public string Zone = "";       // e.g. "PST, GMT−8"
         public string AutoExit = "";
         public int PinState;
         public int Digits;
@@ -28,13 +31,25 @@ namespace ClaudeCurtain
         // Glanceable info (see SysStats). Empty strings / arrays mean "nothing to show".
         public string Stats = "";
         public string SysInfo = "";
+        public string Cpu = "", Ram = "", Net = "", Uptime = "", Disk = "";
         public string[] Weather = NoWeather;
+        public SysSnapshot Sys;          // numbers and ten-minute history for the charts (null = strings only)
+        public double NightDim = 1.0;    // the clock's brightness: 1 by day, CurtainPainter.NightLevel overnight
+
+        /// <summary>Everything that changes what is drawn, apart from where it sits (the drift).</summary>
+        public string ContentKey()
+        {
+            return Clock + "|" + Date + "|" + Zone + "|" + PinState + "|" + Digits + "|" + CooldownLeft + "|" +
+                   (Bright ? "1" : "0") + "|" + (AdminNotice ? "1" : "0") + "|" +
+                   Cpu + "|" + Ram + "|" + Net + "|" + Uptime + "|" + Disk + "|" +
+                   (Sys == null ? "-" : Sys.Version.ToString(CultureInfo.InvariantCulture)) + "|" +
+                   NightDim.ToString("0.00", CultureInfo.InvariantCulture) + "|" +
+                   (Weather == null ? "" : string.Join("¦", Weather));
+        }
 
         public string Key()
         {
-            return Clock + "|" + Date + "|" + PinState + "|" + Digits + "|" + CooldownLeft + "|" +
-                   (Bright ? "1" : "0") + "|" + (AdminNotice ? "1" : "0") + "|" + Drift + "|" +
-                   Stats + "|" + SysInfo + "|" + (Weather == null ? "" : string.Join("¦", Weather));
+            return ContentKey() + "|" + Drift;
         }
     }
 
@@ -48,26 +63,12 @@ namespace ClaudeCurtain
     /// </summary>
     internal sealed class CurtainForm : Form
     {
-        private static readonly Color ColorClock = Color.FromArgb(205, 205, 205);
-        private static readonly Color ColorTitle = Color.FromArgb(165, 165, 165);
-        private static readonly Color ColorDim = Color.FromArgb(110, 110, 110);
-        private static readonly Color ColorFaint = Color.FromArgb(88, 88, 88);
-        private static readonly Color ColorBright = Color.FromArgb(190, 190, 190);
-        private static readonly Color ColorWrong = Color.FromArgb(215, 95, 95);
-        private static readonly Color ColorWarn = Color.FromArgb(205, 160, 70);
-
         private readonly CurtainUi owner;
+        private readonly CurtainPainter painter = new CurtainPainter();
         private Rectangle target;
         private bool affinityOk;
         private int affinityError;
         private bool retiring;
-        private int fontUnit;
-        private Font fontClock;
-        private Font fontDate;
-        private Font fontTitle;
-        private Font fontHint;
-        private Font fontSmall;
-        private Font fontInfo;
 
         public CurtainForm(CurtainUi owner, Rectangle bounds)
         {
@@ -185,7 +186,7 @@ namespace ClaudeCurtain
             g.Clear(Color.Black);
             try
             {
-                Draw(g, owner.Current);
+                PaintTo(g, owner.Current, ClientSize.Width, ClientSize.Height);
             }
             catch (Exception ex)
             {
@@ -194,143 +195,21 @@ namespace ClaudeCurtain
             }
         }
 
-        private void Draw(Graphics g, DisplayState s)
+        internal void PaintTo(Graphics g, DisplayState s, int w, int h)
         {
-            int w = ClientSize.Width;
-            int h = ClientSize.Height;
-            if (s == null || w < 80 || h < 80) return;
-
-            int unit = Math.Max(24, Math.Min(w / 16, h / 9));
-            EnsureFonts(unit);
-            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-
-            // Everything drifts slowly, together, so that over the hours the display stays lit nothing
-            // is burned into the panel. s.Drift advances every tick (~200 ms) and the window repaints each
-            // step, so these slow, mismatched rates trace a wide Lissajous wander (x-cycle ~4 min,
-            // y-cycle ~6 min) within +/-6% of centre as a smooth sub-pixel creep rather than visible hops.
-            float dx = (float)(Math.Sin(s.Drift * 0.0050) * w * 0.06);
-            float dy = (float)(Math.Cos(s.Drift * 0.0037) * h * 0.06);
-            float cx = w / 2f + dx;
-            float clockY = h * 0.36f + dy;
-            float titleY = h * 0.60f + dy;
-            float pinY = titleY + unit * 1.30f;
-
-            using (StringFormat center = new StringFormat())
-            {
-                center.Alignment = StringAlignment.Center;
-                center.LineAlignment = StringAlignment.Center;
-                center.FormatFlags = StringFormatFlags.NoWrap | StringFormatFlags.NoClip;
-
-                // A quiet cluster of glanceable info across the top: machine stats, then a short forecast.
-                // Deliberately dim, so it never competes with the message below; it drifts with everything else.
-                float infoY = h * 0.05f + dy;
-                float lineH = unit * 0.32f;
-                if (!string.IsNullOrEmpty(s.Stats)) { DrawText(g, s.Stats, fontInfo, ColorDim, cx, infoY, w, center); infoY += lineH; }
-                if (!string.IsNullOrEmpty(s.SysInfo)) { DrawText(g, s.SysInfo, fontInfo, ColorDim, cx, infoY, w, center); infoY += lineH; }
-                if (s.Weather != null && s.Weather.Length > 0)
-                {
-                    infoY += lineH * 0.4f;
-                    for (int i = 0; i < s.Weather.Length; i++)
-                    {
-                        DrawText(g, s.Weather[i], fontInfo, i == 0 ? ColorFaint : ColorDim, cx, infoY, w, center);
-                        infoY += lineH;
-                    }
-                }
-
-                DrawText(g, s.Clock, fontClock, ColorClock, cx, clockY, w, center);
-                DrawText(g, s.Date, fontDate, ColorDim, cx, clockY + unit * 0.98f, w, center);
-                DrawText(g, "PC in use by Claude", fontTitle, ColorTitle, cx, titleY, w, center);
-                DrawText(g, "Locked while Claude is working.", fontHint, ColorTitle, cx, titleY + unit * 0.52f, w, center);
-                DrawText(g, "Any attempt to use, unlock or interrupt this PC is logged.", fontHint, ColorTitle, cx, titleY + unit * 0.78f, w, center);
-
-                switch (s.PinState)
-                {
-                    case PinGate.StateTyping:
-                        DrawDots(g, s.Digits, cx, pinY, unit);
-                        DrawText(g, "Enter to unlock, Esc to clear", fontSmall, ColorDim, cx, pinY + unit * 0.34f, w, center);
-                        break;
-                    case PinGate.StateWrong:
-                        DrawText(g, "Wrong PIN", fontHint, ColorWrong, cx, pinY, w, center);
-                        break;
-                    case PinGate.StateCooldown:
-                        DrawText(g, "Too many wrong tries. Wait " + s.CooldownLeft + " s.", fontHint, ColorWarn, cx, pinY, w, center);
-                        break;
-                    default:
-                        DrawText(g, "Keyboard and mouse are blocked.",
-                                 fontHint, s.Bright ? ColorBright : ColorDim, cx, pinY, w, center);
-                        break;
-                }
-
-                float bottom = h * 0.90f + dy / 2f;
-                if (s.AdminNotice)
-                {
-                    DrawText(g, "An administrator window has focus. If the PIN does not respond, press the Windows key first.",
-                             fontSmall, ColorWarn, cx, bottom - unit * 0.30f, w, center);
-                }
-                // Deliberately not shown here: the closing time (curtain-on prints it) and the emergency
-                // exits (Ctrl+Alt+Del and the power button still always work; see the README).
-            }
+            painter.Paint(g, s, w, h);
+            if (painter.NeedsFastFrames && owner != null) owner.RequestFrames();
         }
 
-        private static void DrawText(Graphics g, string text, Font font, Color color, float cx, float cy, int width, StringFormat format)
-        {
-            if (string.IsNullOrEmpty(text) || font == null) return;
-            using (SolidBrush brush = new SolidBrush(color))
-            {
-                float half = font.GetHeight(g);
-                RectangleF box = new RectangleF(cx - width, cy - half, width * 2f, half * 2f);
-                g.DrawString(text, font, brush, box, format);
-            }
-        }
+        /// <summary>True while this window's painter is in the middle of an animation.</summary>
+        public bool Animating { get { return painter.NeedsFastFrames; } }
 
-        private static void DrawDots(Graphics g, int count, float cx, float cy, int unit)
-        {
-            int n = Math.Min(Math.Max(count, 0), PinGate.MaxBuffer);
-            if (n == 0) return;
-            float size = unit * 0.14f;
-            float gap = unit * 0.30f;
-            float left = cx - ((n - 1) * gap) / 2f;
-            using (SolidBrush brush = new SolidBrush(ColorClock))
-            {
-                for (int i = 0; i < n; i++)
-                {
-                    g.FillEllipse(brush, left + i * gap - size / 2f, cy - size / 2f, size, size);
-                }
-            }
-        }
-
-        private void EnsureFonts(int unit)
-        {
-            if (fontClock != null && unit == fontUnit) return;
-            DisposeFonts();
-            fontUnit = unit;
-            fontClock = MakeFont("Segoe UI Light", unit * 1.30f);
-            fontDate = MakeFont("Segoe UI", unit * 0.20f);
-            fontTitle = MakeFont("Segoe UI Semilight", unit * 0.42f);
-            fontHint = MakeFont("Segoe UI", unit * 0.17f);
-            fontSmall = MakeFont("Segoe UI", unit * 0.125f);
-            fontInfo = MakeFont("Segoe UI", unit * 0.16f);
-        }
-
-        private static Font MakeFont(string family, float pixels)
-        {
-            return new Font(family, Math.Max(9f, pixels), FontStyle.Regular, GraphicsUnit.Pixel);
-        }
-
-        private void DisposeFonts()
-        {
-            Font[] all = { fontClock, fontDate, fontTitle, fontHint, fontSmall, fontInfo };
-            foreach (Font f in all)
-            {
-                if (f != null) f.Dispose();
-            }
-            fontClock = fontDate = fontTitle = fontHint = fontSmall = fontInfo = null;
-        }
+        /// <summary>Previews: the painter itself, to drive it with a fixed clock.</summary>
+        internal CurtainPainter Painter { get { return painter; } }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing) DisposeFonts();
+            if (disposing) painter.Dispose();
             base.Dispose(disposing);
         }
     }
@@ -430,6 +309,9 @@ namespace ClaudeCurtain
 
         private readonly List<CurtainForm> forms = new List<CurtainForm>();
         private readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
+        // Runs only while a short animation plays (fade-in, minute cross-fade, PIN dots, wrong-PIN shake), so
+        // the screen repaints at ~60 frames a second then and at the 200 ms tick the rest of the time.
+        private readonly System.Windows.Forms.Timer frames = new System.Windows.Forms.Timer();
         private readonly PinGate gate;
         private readonly InputHooks hooks;
         private readonly KeyQueue queue;
@@ -488,6 +370,22 @@ namespace ClaudeCurtain
             timer.Interval = TickMs;
             timer.Tick += OnTick;
             timer.Start();
+            frames.Interval = 16;
+            frames.Tick += delegate
+            {
+                bool any = false;
+                foreach (CurtainForm f in forms)
+                {
+                    if (f.Animating) { any = true; f.Invalidate(); }
+                }
+                if (!any) frames.Stop();
+            };
+        }
+
+        /// <summary>A window's painter started an animation: repaint at frame rate until it ends.</summary>
+        public void RequestFrames()
+        {
+            if (!frames.Enabled && timer.Enabled) frames.Start();
         }
 
         public void DisplayChanged() { pendingReconcile = true; }
@@ -540,12 +438,44 @@ namespace ClaudeCurtain
             }
         }
 
+        /// <summary>
+        /// The local time zone and its distance from GMT, for example "PST, GMT−8" or "PDT, GMT−7". Windows
+        /// only gives long names ("Pacific Daylight Time"), so the short form is their initials.
+        /// </summary>
+        public static string ZoneText(DateTime local)
+        {
+            try
+            {
+                TimeZoneInfo tz = TimeZoneInfo.Local;
+                string name = tz.IsDaylightSavingTime(local) ? tz.DaylightName : tz.StandardName;
+                StringBuilder abbr = new StringBuilder();
+                foreach (string word in (name ?? "").Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries))
+                {
+                    if (char.IsLetter(word[0])) abbr.Append(char.ToUpperInvariant(word[0]));
+                }
+                TimeSpan off = tz.GetUtcOffset(local);
+                string gmt = "GMT";
+                if (off != TimeSpan.Zero)
+                {
+                    TimeSpan a = off.Duration();
+                    gmt += (off < TimeSpan.Zero ? "−" : "+") + (int)a.TotalHours + (a.Minutes != 0 ? ":" + a.Minutes.ToString("00") : "");
+                }
+                return abbr.Length >= 2 && abbr.Length <= 5 ? abbr + ", " + gmt : gmt;
+            }
+            catch
+            {
+                return "";
+            }
+        }
+
         private void UpdateDisplay()
         {
             DateTime now = DateTime.Now;
             DisplayState s = new DisplayState();
             s.Clock = now.ToString("t");
             s.Date = now.ToString("dddd, MMMM d");
+            s.Zone = ZoneText(now);
+            s.NightDim = CurtainPainter.NightFactor(now);
             s.AutoExit = autoExitText;
             s.PinState = gate.State;
             s.Digits = gate.Digits;
@@ -564,7 +494,10 @@ namespace ClaudeCurtain
             {
                 s.Stats = stats.StatsLine;
                 s.SysInfo = stats.SysLine;
+                s.Cpu = stats.Cpu; s.Ram = stats.Ram; s.Net = stats.Net;
+                s.Uptime = stats.UpFor; s.Disk = stats.Disk;
                 s.Weather = stats.Weather;
+                s.Sys = stats.Snapshot;
             }
 
             string key = s.Key();

@@ -239,7 +239,7 @@ namespace ClaudeCurtain
                 if ((flags & (Native.LLKHF_INJECTED | Native.LLKHF_LOWER_IL_INJECTED)) != 0)
                 {
                     passedKeys++;
-                    if (pinFromInjected) Feed(vk, up);   // automated tests only
+                    if (pinFromInjected) Feed(vk, up, false);   // automated tests only
                     return Native.CallNextHookEx(IntPtr.Zero, nCode, wParam, lParam);
                 }
 
@@ -250,7 +250,7 @@ namespace ClaudeCurtain
                 }
 
                 if (!up) { activity = activity + 1; keyPresses++; }
-                Feed(vk, up);
+                Feed(vk, up, !up);   // a key-down was just counted in keyPresses
                 blockedKeys++;
                 return (IntPtr)1;
             }
@@ -262,17 +262,18 @@ namespace ClaudeCurtain
             }
         }
 
-        private void Feed(int vk, bool up)
+        private void Feed(int vk, bool up, bool counted)
         {
+            int mark = counted ? KeyQueue.FlagCounted : 0;
             bool digit = (vk >= 0x30 && vk <= 0x39) || (vk >= 0x60 && vk <= 0x69);
             if (digit || vk == Native.VK_BACK || vk == Native.VK_ESCAPE)
             {
-                if (!up) queue.Push(vk);
+                if (!up) queue.Push(vk | mark);
                 return;
             }
             if (vk == Native.VK_RETURN)
             {
-                queue.Push(up ? (vk | KeyQueue.FlagUp) : vk);
+                queue.Push(up ? (vk | KeyQueue.FlagUp) : (vk | mark));
             }
         }
 

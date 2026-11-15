@@ -22,6 +22,7 @@ namespace ClaudeCurtain
                 TestKeyQueue();
                 TestAlerter(o);
                 TestSysStats(o);
+                TestPainter(o);
                 TestEnvironment();
             }
             catch (Exception ex)
@@ -95,6 +96,7 @@ namespace ClaudeCurtain
             public long Now = 1000;
             public bool Unlocked;
             public int VerifyCalls;
+            public bool Counted;   // feed key-downs as if the hooks had counted them (physical keys)
 
             public Driver(string pin)
             {
@@ -129,7 +131,7 @@ namespace ClaudeCurtain
 
             private void Key(int vk, bool up, bool submit)
             {
-                if (Gate.OnKey(vk, up, submit, Now)) Unlocked = true;
+                if (Gate.OnKey(vk, up, submit, Counted && !up && !submit, Now)) Unlocked = true;
             }
         }
 
@@ -192,6 +194,21 @@ namespace ClaudeCurtain
 
             Driver jump = new Driver("4821").Type("48").Wait(10L * 60 * 60 * 1000).Type("4821E");
             Check("gate: a long sleep mid-entry leaves the gate usable", jump.Unlocked);
+
+            // Which key presses belong to the unlocking entry (left out of the blocked-key tally).
+            Driver own = new Driver("4821") { Counted = true }.Type("4821E");
+            Check("gate: the unlocking entry is digits plus Enter", own.Unlocked && own.Gate.UnlockKeys == 5);
+            Driver typo = new Driver("4821") { Counted = true }.Type("4822B1E");
+            Check("gate: a corrected typo belongs to the unlocking entry", typo.Unlocked && typo.Gate.UnlockKeys == 7);
+            Driver afterWrong = new Driver("4821") { Counted = true }.Type("1111E99X4821E");
+            Check("gate: wrong tries and cleared entries are not part of the unlock",
+                  afterWrong.Unlocked && afterWrong.Gate.UnlockKeys == 5);
+            Driver held = new Driver("4821") { Counted = true }.Type("4821ddddu");
+            Check("gate: a held Enter's repeats belong to the unlocking entry", held.Unlocked && held.Gate.UnlockKeys == 8);
+            Driver notCounted = new Driver("4821").Type("4821E");
+            Check("gate: keys the hooks did not count are not taken off", notCounted.Unlocked && notCounted.Gate.UnlockKeys == 0);
+            Driver noUnlock = new Driver("4821") { Counted = true }.Type("4821");
+            Check("gate: nothing is taken off without an unlock", noUnlock.Gate.UnlockKeys == 0);
         }
 
         private static void TestKeyQueue()
@@ -281,6 +298,113 @@ namespace ClaudeCurtain
             }
         }
 
+        /// <summary>
+        /// The curtain's drawing, without a window: every state renders and fits several screen sizes, the
+        /// drift keeps the composition fully on screen for hours, and a re-render is quick (it happens
+        /// whenever a reading changes, about once a second).
+        /// </summary>
+        private static void TestPainter(Options o)
+        {
+            Size[] screens = { new Size(1280, 720), new Size(1920, 1080), new Size(1920, 1200), new Size(2560, 1440), new Size(3440, 1440), new Size(1080, 1920) };
+            string[] states = { "idle", "typing", "wrong", "cooldown", "admin", "bright", "night" };
+            bool allFit = true, allOnScreen = true, columnsGolden = true;
+            string worst = "";
+            long slowestMs = 0;
+            foreach (Size scr in screens)
+            {
+                foreach (string state in states)
+                {
+                    Options po = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir"), TestState = state };
+                    DisplayState s = CurtainPreview.Sample(po);
+                    Stopwatch sw = Stopwatch.StartNew();
+                    CurtainPainter.Layout l = CurtainPainter.Compose(s, scr.Width, scr.Height);
+                    sw.Stop();
+                    try
+                    {
+                        slowestMs = Math.Max(slowestMs, sw.ElapsedMilliseconds);
+                        Bitmap b = l == null ? null : l.Block;
+                        if (b == null || b.Width > scr.Width * 0.9 + 1 || b.Height > scr.Height * 0.9 + 1)
+                        {
+                            allFit = false;
+                            worst = state + " at " + scr.Width + "x" + scr.Height;
+                            continue;
+                        }
+                        if (l.Landscape && l.HasRight && Math.Abs(l.LeftCol.Width / l.RightCol.Width - CurtainPainter.Phi) > 0.01)
+                        {
+                            columnsGolden = false;
+                            worst = state + " at " + scr.Width + "x" + scr.Height + ": " + l.LeftCol.Width + " : " + l.RightCol.Width;
+                        }
+                        // Eight hours of drift, one sample every 7 s: the composition never leaves the screen.
+                        for (double t = 0; t < 8 * 3600; t += 7)
+                        {
+                            Point p = CurtainPainter.Place(b.Width, b.Height, scr.Width, scr.Height, t);
+                            if (p.X < 0 || p.Y < 0 || p.X + b.Width > scr.Width || p.Y + b.Height > scr.Height)
+                            {
+                                allOnScreen = false;
+                                worst = state + " at " + scr.Width + "x" + scr.Height + ", t=" + t + " s";
+                                break;
+                            }
+                        }
+                    }
+                    finally
+                    {
+                        if (l != null) l.Dispose();
+                    }
+                }
+            }
+            lines.Add("INFO  slowest curtain render: " + slowestMs + " ms");
+            Check("painter: every state fits 720p, 1080p, 16:10, 1440p, ultrawide and portrait screens" + (allFit ? "" : " (" + worst + ")"), allFit);
+            Check("painter: on landscape screens the two columns are exactly phi : 1" + (columnsGolden ? "" : " (" + worst + ")"), columnsGolden);
+            Check("painter: the drift keeps everything on screen for 8 hours" + (allOnScreen ? "" : " (" + worst + ")"), allOnScreen);
+            Check("painter: a re-render takes under 150 ms", slowestMs < 150);
+
+            // Colour: every text tone readable on black (WCAG AA 4.5:1); body text and values AAA (7:1).
+            bool aa = true;
+            string weakest = "";
+            double weakestRatio = 99;
+            foreach (KeyValuePair<string, Color> t in CurtainPainter.TextTones)
+            {
+                double r = CurtainPainter.ContrastOnBlack(t.Value);
+                if (r < weakestRatio) { weakestRatio = r; weakest = t.Key; }
+                if (r < 4.5) aa = false;
+            }
+            lines.Add("INFO  weakest text tone: " + weakest + " at " + weakestRatio.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + ":1");
+            Check("colour: every text tone meets WCAG AA on black (4.5:1)", aa);
+            Check("colour: body text and values meet WCAG AAA on black (7:1)", CurtainPainter.ContrastOnBlack(CurtainPainter.Secondary) >= 7.0);
+
+            // Motion: the animations run with a fixed clock, start fast frames, and settle again.
+            using (Bitmap canvas = new Bitmap(1280, 720))
+            using (Graphics g = Graphics.FromImage(canvas))
+            using (CurtainPainter p = new CurtainPainter())
+            {
+                Options po = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") };
+                p.FixedNowMs = 0;
+                p.Paint(g, CurtainPreview.Sample(po, "idle"), 1280, 720);
+                bool fadeFast = p.NeedsFastFrames;
+                p.FixedNowMs = 1500;
+                p.Paint(g, CurtainPreview.Sample(po, "idle"), 1280, 720);
+                bool settled = !p.NeedsFastFrames;
+                p.FixedNowMs = 2000;
+                p.Paint(g, CurtainPreview.Sample(po, "typing"), 1280, 720);
+                bool dotsFast = p.NeedsFastFrames;
+                p.FixedNowMs = 3000;
+                p.Paint(g, CurtainPreview.Sample(po, "wrong"), 1280, 720);
+                bool shakeFast = p.NeedsFastFrames;
+                p.FixedNowMs = 4000;
+                p.Paint(g, CurtainPreview.Sample(po, "wrong"), 1280, 720);
+                bool shakeDone = !p.NeedsFastFrames;
+                Check("motion: the fade-in runs at frame rate, then the screen goes back to its slow tick", fadeFast && settled);
+                Check("motion: typed PIN dots and a wrong-PIN shake animate, then settle", dotsFast && shakeFast && shakeDone);
+            }
+
+            Point a = CurtainPainter.Place(1000, 800, 2560, 1440, 0);
+            Point later = CurtainPainter.Place(1000, 800, 2560, 1440, 0.2);
+            Check("painter: the drift moves at most a pixel per 200 ms frame",
+                  Math.Abs(a.X - later.X) <= 1 && Math.Abs(a.Y - later.Y) <= 1);
+            Check("painter: it rests on the golden section (space above : below = 1 : phi)",
+                  Math.Abs((1440 - 800) / (1 + CurtainPainter.Phi) - a.Y) <= 1);
+        }
+
         private static void TestEnvironment()
         {
             int level = Integrity.OfCurrentProcess();
@@ -291,6 +415,15 @@ namespace ClaudeCurtain
             List<Rectangle> monitors = Monitors.Enumerate();
             lines.Add("INFO  monitors: " + Monitors.Describe(monitors));
             Check("at least one monitor is reported", monitors.Count >= 1);
+
+            string zone = CurtainUi.ZoneText(DateTime.Now);
+            lines.Add("INFO  time zone on the curtain: " + zone);
+            Check("the curtain shows the time zone and its GMT offset", zone.Contains("GMT"));
+            if (TimeZoneInfo.Local.Id == "Pacific Standard Time")
+            {
+                Check("Pacific time reads PST, GMT−8 in winter", CurtainUi.ZoneText(new DateTime(2026, 1, 15, 12, 0, 0)) == "PST, GMT−8");
+                Check("Pacific time reads PDT, GMT−7 in summer", CurtainUi.ZoneText(new DateTime(2026, 7, 15, 12, 0, 0)) == "PDT, GMT−7");
+            }
 
             Version os = Environment.OSVersion.Version;
             lines.Add("INFO  Windows build " + os.Build);

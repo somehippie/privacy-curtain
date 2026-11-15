@@ -11,7 +11,7 @@
     - Ctrl+Alt+Del, or the physical power button: neither is ever intercepted
 
 .PARAMETER Hours
-  Close automatically after this many hours. Default 8, at most 24. Fractions are fine.
+  Close automatically after this many hours. Default 12, at most 24. Fractions are fine.
 
 .PARAMETER Minutes
   Close automatically after this many minutes instead (handy for a test: -Minutes 2).
@@ -28,7 +28,7 @@
 #>
 [CmdletBinding()]
 param(
-    [double]$Hours = 8,
+    [double]$Hours = 12,
     [double]$Minutes = 0,
     [switch]$Restart,
     # The two below are for test-curtain.ps1 only.

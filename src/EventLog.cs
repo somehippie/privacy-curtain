@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Windows.Forms;
 
@@ -47,9 +50,44 @@ namespace ClaudeCurtain
             runPid = pid;
         }
 
+        // This run's notable moments, for the timeline in the "While you were away" window. Kinds only, never
+        // what was typed. Capped, so even a curtain left up for days stays small.
+        private static readonly List<KeyValuePair<DateTime, string>> moments = new List<KeyValuePair<DateTime, string>>();
+
+        private static bool OnTimeline(string kind, string text)
+        {
+            switch (kind)
+            {
+                case "input": case "wrong-pin": case "taskmgr": case "admin-window": case "lock": case "remote": return true;
+                case "security-screen": return text.IndexOf("opened", StringComparison.OrdinalIgnoreCase) >= 0;
+                default: return false;
+            }
+        }
+
+        /// <summary>Writes this run's moments as "seconds-from-start TAB kind" lines, after a start/end header.</summary>
+        public static void WriteTimeline(string file, DateTime startUtc, DateTime endUtc)
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.Append("start\t").Append(startUtc.ToString("o", CultureInfo.InvariantCulture)).Append("\r\n");
+            sb.Append("end\t").Append(endUtc.ToString("o", CultureInfo.InvariantCulture)).Append("\r\n");
+            lock (gate)
+            {
+                foreach (KeyValuePair<DateTime, string> m in moments)
+                {
+                    double s = Math.Max(0, (m.Key - startUtc).TotalSeconds);
+                    sb.Append(s.ToString("0", CultureInfo.InvariantCulture)).Append('\t').Append(m.Value).Append("\r\n");
+                }
+            }
+            File.WriteAllText(file, sb.ToString(), Encoding.UTF8);
+        }
+
         public static void Write(string kind, string text)
         {
             if (path == null) return;
+            if (OnTimeline(kind, text ?? ""))
+            {
+                lock (gate) { if (moments.Count < 5000) moments.Add(new KeyValuePair<DateTime, string>(DateTime.UtcNow, kind)); }
+            }
             string line = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture) + "\t" +
                           runPid.ToString(CultureInfo.InvariantCulture) + "\t" + kind + "\t" +
                           text.Replace('\t', ' ').Replace('\r', ' ').Replace('\n', ' ') + "\r\n";
@@ -175,90 +213,390 @@ namespace ClaudeCurtain
         }
     }
 
-    /// <summary>The "While you were away" window shown after a PIN unlock. Closes itself after 10 seconds.</summary>
+    /// <summary>
+    /// The "While you were away" window shown after a PIN unlock, in the curtain's design language: the
+    /// session length as the hero figure, a timeline of the session (short neutral ticks where someone was
+    /// at the keyboard or mouse, taller accent ticks for alerts), then the counts as a table. It sizes itself
+    /// to its content and to the screen, never takes focus, and closes itself after 10 seconds.
+    /// </summary>
     internal sealed class SummaryView : Form
     {
+        private const int EdgeGap = 24;   // keep at least this much of the screen free around the window
+        private static readonly Color Background = Color.FromArgb(14, 14, 13);
+        private static readonly Regex UpLine = new Regex(@"^Curtain was up for (?<dur>.+?) \((?<from>.+?) to (?<to>.+?)\)\.\s*Closed by:\s*(?<by>.+?)\.?$");
+
+        private sealed class Model
+        {
+            public string Heading = "While you were away";
+            public string Duration = "", From = "", To = "", ClosedBy = "";
+            public readonly List<string[]> Rows = new List<string[]>();   // label, value (null: a sentence)
+            public string Record = "";
+            public int BodyLines;
+        }
+
+        private sealed class Item
+        {
+            public int Kind;   // 0 text (Y = baseline), 1 rectangle
+            public string Text;
+            public CurtainPainter.Face Face;
+            public Color Color;
+            public float X, Y, W, H, Tracking;
+        }
+
         private readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
-        private readonly Label footer = new Label();
+        private readonly Model model;
+        private readonly List<KeyValuePair<double, string>> moments;   // seconds from start, kind (null: none)
+        private readonly double span;
+        private readonly Size screen;      // the screen size the text is scaled to
+        private readonly Rectangle area;   // where the window may sit: the primary monitor's working area
+        private readonly List<Item> items = new List<Item>();
+        private readonly List<CurtainPainter.Face> faces = new List<CurtainPainter.Face>();
+        private Item footer;
+        private Size wanted;               // the window size the last layout asked for (before Windows clamps it)
+        private float scale = 1f, trackPx;
+        private int columns = 1;
         private int secondsLeft = 10;
 
-        public SummaryView(string text)
+        public SummaryView(string text, List<KeyValuePair<double, string>> moments, double span, Size testScreen)
         {
-            // Size everything to the screen (in pixels, so a high-DPI display does not shrink it). The old
-            // fixed point sizes came out tiny on a scaled 1440p panel.
-            int sh = 1080, sw = 1920;
-            try { sh = Screen.PrimaryScreen.Bounds.Height; sw = Screen.PrimaryScreen.Bounds.Width; } catch { }
-            float bodyPx = Math.Max(16f, sh / 62f);
-            float headerPx = Math.Max(24f, sh / 38f);
-            float footerPx = Math.Max(13f, sh / 92f);
+            Rectangle bounds = new Rectangle(0, 0, 1920, 1080);
+            Rectangle work = bounds;
+            try { bounds = Screen.PrimaryScreen.Bounds; work = Screen.PrimaryScreen.WorkingArea; } catch { }
+            if (testScreen.Width > 0 && testScreen.Height > 0)
+            {
+                // Tests only: behave as if the primary monitor were this size (same taskbar allowance).
+                work = new Rectangle(work.X, work.Y,
+                                     testScreen.Width - (bounds.Width - work.Width),
+                                     testScreen.Height - (bounds.Height - work.Height));
+                bounds = new Rectangle(bounds.Location, testScreen);
+            }
+            screen = bounds.Size;
+            area = work;
+            model = Parse(text);
+            this.moments = moments;
+            this.span = span;
 
             Text = "While you were away";
-            Font = new Font("Segoe UI", bodyPx, GraphicsUnit.Pixel);
-            FormBorderStyle = FormBorderStyle.FixedDialog;
-            MaximizeBox = false;
-            MinimizeBox = false;
+            AutoScaleMode = AutoScaleMode.None;
+            FormBorderStyle = FormBorderStyle.None;
             ShowInTaskbar = false;
-            StartPosition = FormStartPosition.CenterScreen;
+            StartPosition = FormStartPosition.Manual;
             TopMost = true;
-            BackColor = Color.FromArgb(24, 24, 24);
-            ForeColor = Color.Gainsboro;
-            Padding = new Padding(30, 24, 30, 16);
-            AutoSize = true;
-            AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            BackColor = Background;
+            DoubleBuffered = true;
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.OptimizedDoubleBuffer, true);
 
-            // The first line is the heading ("While you were away"); the rest is the body.
-            string all = (text ?? "").Trim();
-            string heading = all, rest = "";
-            int nl = all.IndexOf('\n');
-            if (nl >= 0) { heading = all.Substring(0, nl).TrimEnd('\r'); rest = all.Substring(nl + 1).Trim(); }
-
-            Label body = new Label();
-            body.AutoSize = true;
-            body.MaximumSize = new Size((int)Math.Min(1200, sw * 0.7), 0);
-            body.Text = rest;
-            body.Dock = DockStyle.Top;
-
-            Label head = new Label();
-            head.AutoSize = true;
-            head.Font = new Font("Segoe UI Semibold", headerPx, GraphicsUnit.Pixel);
-            head.Text = heading;
-            head.Padding = new Padding(0, 0, 0, (int)(headerPx * 0.5f));
-            head.Dock = DockStyle.Top;
-
-            footer.AutoSize = true;
-            footer.Font = new Font("Segoe UI", footerPx, GraphicsUnit.Pixel);
-            footer.ForeColor = Color.Gray;
-            footer.Dock = DockStyle.Bottom;
-            footer.Padding = new Padding(0, 14, 0, 0);
-
-            // Add body first, then the heading, so the heading docks above the body; footer at the bottom.
-            Controls.Add(body);
-            Controls.Add(head);
-            Controls.Add(footer);
-            UpdateFooter();
+            // Lay out at full size. A long summary first flows its table into more columns, then steps its
+            // text down, until it fits the screen.
+            bool placed = false;
+            scale = 1f;
+            while (!placed && scale > 0.45f)
+            {
+                for (columns = 1; columns <= 3; columns++)
+                {
+                    if (columns > 1 && model.Rows.Count < columns * 4) break;
+                    Arrange();
+                    if (wanted.Height <= area.Height - 2 * EdgeGap && wanted.Width <= area.Width - 2 * EdgeGap) { placed = true; break; }
+                }
+                if (!placed) scale *= 0.92f;
+            }
+            if (!placed) { scale = 0.45f; columns = 1; Arrange(); }
 
             EventHandler close = delegate { Close(); };
             Click += close;
-            body.Click += close;
-            footer.Click += close;
             KeyPreview = true;
             KeyDown += delegate { Close(); };
-
             timer.Interval = 1000;
             timer.Tick += delegate
             {
                 secondsLeft--;
                 if (secondsLeft <= 0) { timer.Stop(); Close(); }
-                else UpdateFooter();
+                else { footer.Text = FooterText(); Invalidate(); }
             };
             timer.Start();
         }
 
         protected override bool ShowWithoutActivation { get { return true; } }
 
-        private void UpdateFooter()
+        private string FooterText() { return "CLOSES IN " + secondsLeft + " S   ·   CLICK OR PRESS A KEY TO CLOSE NOW"; }
+
+        private static Model Parse(string text)
         {
-            footer.Text = "Closes in " + secondsLeft + " s. Click or press a key to close now.";
+            Model m = new Model();
+            bool first = true;
+            foreach (string raw in (text ?? "").Replace("\r", "").Split('\n'))
+            {
+                string line = raw.Trim();
+                if (line.Length == 0) continue;
+                if (first) { m.Heading = line; first = false; continue; }
+                m.BodyLines++;
+                Match up = UpLine.Match(line);
+                if (up.Success)
+                {
+                    m.Duration = up.Groups["dur"].Value.Trim();
+                    m.From = up.Groups["from"].Value.Trim();
+                    m.To = up.Groups["to"].Value.Trim();
+                    m.ClosedBy = up.Groups["by"].Value.Trim();
+                    continue;
+                }
+                if (line.StartsWith("Full record", StringComparison.OrdinalIgnoreCase)) { m.Record = line; continue; }
+                if (line.StartsWith("- ")) line = line.Substring(2).Trim();
+                int colon = line.IndexOf(": ", StringComparison.Ordinal);
+                if (colon > 0 && line.Length - colon - 2 <= 36) m.Rows.Add(new[] { line.Substring(0, colon), line.Substring(colon + 2) });
+                else m.Rows.Add(new[] { line, null });
+            }
+            return m;
+        }
+
+        /// <summary>Positions everything for the current scale and sizes the window to it.</summary>
+        private void Arrange()
+        {
+            foreach (CurtainPainter.Face f in faces) f.Font.Dispose();
+            faces.Clear();
+            items.Clear();
+            CurtainPainter.PickFamilies();
+
+            float su = Math.Max(48f, screen.Height / 9f) * scale;   // the curtain's unit (160 px on a 1440p screen)
+            float c = su * 2.15f;
+            Func<double, float> st = k => (float)(c / Math.Pow(CurtainPainter.Phi, k));
+            Func<string, float, CurtainPainter.Face> face = (fam, px) => { CurtainPainter.Face x = CurtainPainter.MakeFace(fam, px); faces.Add(x); return x; };
+            CurtainPainter.Face fHero = face(CurtainPainter.famLight, st(2.5));
+            CurtainPainter.Face fLabel = face(CurtainPainter.famRegular, st(6));
+            CurtainPainter.Face fBody = face(CurtainPainter.famSemi, st(5.5));
+            CurtainPainter.Face fValue = face(CurtainPainter.famRegular, st(5.5));
+            float track = fLabel.Font.Size * 0.14f;
+            float pad = (float)Math.Round(st(3.5));
+            float minW = Math.Max(su * 3.4f, screen.Width * 0.24f * scale);
+
+            using (Bitmap probe = new Bitmap(1, 1))
+            using (Graphics m = Graphics.FromImage(probe))
+            {
+                Func<string, CurtainPainter.Face, float, float> width = (t, f, tr) => CurtainPainter.Measure(m, t, f.Font, tr);
+                float contentW = minW;
+                float y = pad;
+                float x = pad;
+
+                y += fLabel.CapHeight;
+                string heading = model.Heading.ToUpperInvariant();
+                Add(heading, fLabel, CurtainPainter.Tertiary, x, y, track);
+                contentW = Math.Max(contentW, width(heading, fLabel, track));
+
+                if (model.Duration.Length > 0)
+                {
+                    y += st(4.5) + fHero.CapHeight;
+                    Add(model.Duration, fHero, CurtainPainter.Hero, x, y, 0);
+                    contentW = Math.Max(contentW, width(model.Duration, fHero, 0));
+                    y += st(5) + fLabel.CapHeight;
+                    string range = (model.From + "   →   " + model.To).ToUpperInvariant();
+                    string by = "CLOSED BY " + model.ClosedBy.ToUpperInvariant();
+                    string dot = "   ·   ";
+                    float rx = x + Add(range, fLabel, CurtainPainter.Secondary, x, y, track);
+                    rx += Add(dot, fLabel, CurtainPainter.Tertiary, rx, y, track);
+                    rx += Add(by, fLabel, CurtainPainter.Secondary, rx, y, track);
+                    contentW = Math.Max(contentW, rx - x);
+                }
+
+                y += st(4);
+                float ruleW = (float)Math.Round(c / (CurtainPainter.Phi * CurtainPainter.Phi * CurtainPainter.Phi));
+                Rect(x, (float)Math.Round(y), ruleW, Math.Max(1f, (float)Math.Round(su / 70f)), CurtainPainter.Accent);
+                y += st(4);
+
+                // Rows are measured first so the timeline can span the same width as the table.
+                float labelW = 0, valueW = 0, sentenceW = 0;
+                foreach (string[] r in model.Rows)
+                {
+                    if (r[1] == null) sentenceW = Math.Max(sentenceW, width(r[0], fBody, 0));
+                    else { labelW = Math.Max(labelW, width(r[0], fBody, 0)); valueW = Math.Max(valueW, width(r[1], fValue, 0)); }
+                }
+                float gx = st(4), colGap = st(3);
+                float colW = Math.Max(sentenceW, labelW + gx + valueW);
+                contentW = Math.Max(contentW, columns * colW + (columns - 1) * colGap);
+                string foot = "CLOSES IN 10 S   ·   CLICK OR PRESS A KEY TO CLOSE NOW";
+                contentW = Math.Max(contentW, width(foot, fLabel, track));
+                if (model.Record.Length > 0) contentW = Math.Max(contentW, width(model.Record, fLabel, 0));
+
+                // The session timeline.
+                if (moments != null && span > 0)
+                {
+                    float tickLow = (float)Math.Round(st(6)), tickHigh = (float)Math.Round(st(5));
+                    trackPx = Math.Max(1f, (float)Math.Round(su / 80f));
+                    float mid = y + tickHigh / 2f;
+                    Rect(x, (float)Math.Round(mid - trackPx / 2f), contentW, trackPx, CurtainPainter.Track);
+                    foreach (KeyValuePair<double, string> mo in moments)
+                    {
+                        bool alert = mo.Value != "input";
+                        float tx = x + (float)(contentW * Math.Max(0, Math.Min(1, mo.Key / span)));
+                        float th = alert ? tickHigh : tickLow, tw = alert ? Math.Max(2f, trackPx * 2) : Math.Max(1f, trackPx);
+                        Rect((float)Math.Round(tx - tw / 2f), (float)Math.Round(mid - th / 2f), tw, th, alert ? CurtainPainter.Accent : CurtainPainter.Secondary);
+                    }
+                    y = mid + tickHigh / 2f + st(5.5) + fLabel.CapHeight;
+                    string a = model.From.ToUpperInvariant(), b = model.To.ToUpperInvariant();
+                    Add(a, fLabel, CurtainPainter.Tertiary, x, y, track);
+                    Add(b, fLabel, CurtainPainter.Tertiary, x + contentW - width(b, fLabel, track), y, track);
+                    // Legend: two kinds, so it is always shown, and each kind differs in height as well as colour.
+                    string k1 = "KEYBOARD OR MOUSE", k2 = "ALERT";
+                    float lw = tickLow * 0.5f + st(6.5) + width(k1, fLabel, track) + st(4) + tickHigh * 0.2f + st(6.5) + width(k2, fLabel, track);
+                    float lx = x + (contentW - lw) / 2f;
+                    Rect(lx, y - tickLow * 0.75f, Math.Max(1f, trackPx), tickLow * 0.8f, CurtainPainter.Secondary);
+                    lx += tickLow * 0.5f + st(6.5);
+                    lx += Add(k1, fLabel, CurtainPainter.Tertiary, lx, y, track) + st(4);
+                    Rect(lx, y - tickLow, Math.Max(2f, trackPx * 2), tickLow * 1.05f, CurtainPainter.Accent);
+                    lx += tickHigh * 0.2f + st(6.5);
+                    Add(k2, fLabel, CurtainPainter.Tertiary, lx, y, track);
+                    y += st(4);
+                }
+
+                // The counts, as a table with hairlines between rows.
+                float pitch = fBody.Font.Size * (columns > 1 ? 1.75f : 2.0f);
+                if (model.Rows.Count > 0)
+                {
+                    int perColumn = (int)Math.Ceiling(model.Rows.Count / (double)columns);
+                    float cw = (contentW - (columns - 1) * colGap) / columns;
+                    float top = y;
+                    for (int k = 0; k < columns; k++) Rect(x + k * (cw + colGap), (float)Math.Round(top), cw, 1, CurtainPainter.RuleColor);
+                    for (int i = 0; i < model.Rows.Count; i++)
+                    {
+                        string[] r = model.Rows[i];
+                        float cx = x + (i / perColumn) * (cw + colGap), ry = top + (i % perColumn) * pitch;
+                        float baseline = ry + pitch / 2f + fBody.CapHeight / 2f;
+                        Add(r[0], fBody, CurtainPainter.Secondary, cx, baseline, 0);
+                        if (r[1] != null) Add(r[1], fValue, CurtainPainter.Primary, cx + cw - width(r[1], fValue, 0), baseline, 0);
+                        Rect(cx, (float)Math.Round(ry + pitch), cw, 1, CurtainPainter.RuleColor);
+                    }
+                    y = top + perColumn * pitch;
+                }
+
+                y += st(4.5) + fLabel.CapHeight;
+                if (model.Record.Length > 0)
+                {
+                    Add(model.Record, fLabel, CurtainPainter.Tertiary, x, y, 0);
+                    y += st(5.5) + fLabel.CapHeight;
+                }
+                footer = AddItem(FooterText(), fLabel, CurtainPainter.Tertiary, x, y, track);
+                y += fLabel.Font.Size * 0.4f + pad;
+
+                int w = (int)Math.Ceiling(contentW + 2 * pad), h = (int)Math.Ceiling(y);
+                wanted = new Size(w, h);
+                ClientSize = wanted;
+                Location = new Point(Math.Max(area.Left, area.Left + (area.Width - w) / 2),
+                                     Math.Max(area.Top, area.Top + (area.Height - h) / 2));
+            }
+        }
+
+        private float Add(string text, CurtainPainter.Face f, Color color, float x, float baseline, float tracking)
+        {
+            AddItem(text, f, color, x, baseline, tracking);
+            using (Bitmap probe = new Bitmap(1, 1))
+            using (Graphics m = Graphics.FromImage(probe))
+                return CurtainPainter.Measure(m, text, f.Font, tracking);
+        }
+
+        private Item AddItem(string text, CurtainPainter.Face f, Color color, float x, float baseline, float tracking)
+        {
+            Item it = new Item { Kind = 0, Text = text, Face = f, Color = color, X = x, Y = baseline, Tracking = tracking };
+            items.Add(it);
+            return it;
+        }
+
+        private void Rect(float x, float y, float w, float h, Color color)
+        {
+            items.Add(new Item { Kind = 1, X = x, Y = y, W = w, H = h, Color = color });
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            try { PaintContent(e.Graphics); }
+            catch (Exception ex) { Log.WriteOnce("summary-paint", "summary paint failed: " + ex.Message); }
+        }
+
+        /// <summary>Draws the window's content (also used to render it into an image for the README).</summary>
+        internal void PaintContent(Graphics g)
+        {
+            g.Clear(Background);
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            using (Pen border = new Pen(CurtainPainter.RuleColor, 1f))
+                g.DrawRectangle(border, 0, 0, ClientSize.Width - 1, ClientSize.Height - 1);
+            foreach (Item it in items)
+            {
+                if (it.Kind == 1)
+                {
+                    using (SolidBrush b = new SolidBrush(it.Color)) g.FillRectangle(b, it.X, it.Y, it.W, it.H);
+                    continue;
+                }
+                CurtainPainter.DrawText(g, it.Text, it.Face.Font, it.Color, (float)Math.Round(it.X),
+                                        (float)Math.Round(it.Y - it.Face.Ascent), it.Tracking, 0);
+            }
+        }
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                timer.Dispose();
+                foreach (CurtainPainter.Face f in faces) f.Font.Dispose();
+                faces.Clear();
+            }
+            base.Dispose(disposing);
+        }
+
+        /// <summary>
+        /// Tests only: where everything ended up once the window is on screen. "fits" is true when the window
+        /// is inside the working area at the size its layout asked for, so nothing is clipped.
+        /// </summary>
+        private string DescribeLayout()
+        {
+            bool fits = area.Contains(Bounds) && ClientSize.Width >= wanted.Width && ClientSize.Height >= wanted.Height;
+            int shown = model.BodyLines;   // every body line has a place in the layout; none is dropped
+            StringBuilder sb = new StringBuilder();
+            sb.Append("{\"screen\":").Append(Json.Str(screen.Width + "x" + screen.Height));
+            sb.Append(",\"area\":").Append(Json.Str(area.Width + "x" + area.Height + "+" + area.X + "+" + area.Y));
+            sb.Append(",\"window\":").Append(Json.Str(Width + "x" + Height + "+" + Left + "+" + Top));
+            sb.Append(",\"client\":").Append(Json.Str(ClientSize.Width + "x" + ClientSize.Height));
+            sb.Append(",\"wanted\":").Append(Json.Str(wanted.Width + "x" + wanted.Height));
+            sb.Append(",\"scale\":").Append(scale.ToString("0.##", CultureInfo.InvariantCulture));
+            sb.Append(",\"bodyTextLines\":").Append(model.BodyLines);
+            sb.Append(",\"bodyShownLines\":").Append(fits ? shown : 0);
+            sb.Append(",\"fits\":").Append(fits ? "true" : "false").Append("}");
+            return sb.ToString();
+        }
+
+        /// <summary>Reads the timeline the curtain wrote with this summary (null if missing or from another run).</summary>
+        internal static List<KeyValuePair<double, string>> ReadTimeline(string file, string summaryFile, out double span)
+        {
+            span = 0;
+            try
+            {
+                if (!File.Exists(file) || !File.Exists(summaryFile)) return null;
+                if (Math.Abs((File.GetLastWriteTimeUtc(file) - File.GetLastWriteTimeUtc(summaryFile)).TotalSeconds) > 120) return null;
+                DateTime start = DateTime.MinValue, end = DateTime.MinValue;
+                List<KeyValuePair<double, string>> list = new List<KeyValuePair<double, string>>();
+                foreach (string raw in File.ReadAllLines(file, Encoding.UTF8))
+                {
+                    string[] p = raw.Split('\t');
+                    if (p.Length < 2) continue;
+                    if (p[0] == "start") { DateTime.TryParse(p[1], CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out start); continue; }
+                    if (p[0] == "end") { DateTime.TryParse(p[1], CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out end); continue; }
+                    double s;
+                    if (double.TryParse(p[0], NumberStyles.Float, CultureInfo.InvariantCulture, out s)) list.Add(new KeyValuePair<double, string>(s, p[1]));
+                }
+                if (start == DateTime.MinValue || end <= start) return null;
+                span = (end - start).TotalSeconds;
+                return list;
+            }
+            catch { return null; }
+        }
+
+        internal static Size ParseScreen(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return Size.Empty;
+            string[] parts = text.ToLowerInvariant().Split('x');
+            int w, h;
+            if (parts.Length != 2 ||
+                !int.TryParse(parts[0], NumberStyles.None, CultureInfo.InvariantCulture, out w) ||
+                !int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out h))
+                return new Size(-1, -1);
+            return new Size(w, h);
         }
 
         public static int Run(Options o)
@@ -266,9 +604,23 @@ namespace ClaudeCurtain
             string text;
             try { text = File.ReadAllText(o.SummaryFile); }
             catch { return ExitCode.Error; }
+
+            Size testScreen = ParseScreen(o.TestScreen);
+            if (testScreen.Width < 0) return ExitCode.Usage;
+            double span;
+            List<KeyValuePair<double, string>> moments = ReadTimeline(o.TimelineFile, o.SummaryFile, out span);
+
             Application.EnableVisualStyles();
-            using (SummaryView view = new SummaryView(text))
+            using (SummaryView view = new SummaryView(text, moments, span, testScreen))
             {
+                if (!string.IsNullOrEmpty(o.OutFile))
+                {
+                    SummaryView shown = view;
+                    view.Shown += delegate
+                    {
+                        try { File.WriteAllText(o.OutFile, shown.DescribeLayout()); } catch { }
+                    };
+                }
                 Application.Run(view);
             }
             return ExitCode.Ok;
