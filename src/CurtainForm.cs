@@ -35,6 +35,10 @@ namespace ClaudeCurtain
         public string[] Weather = NoWeather;
         public SysSnapshot Sys;          // numbers and ten-minute history for the charts (null = strings only)
         public double NightDim = 1.0;    // the clock's brightness: 1 by day, CurtainPainter.NightLevel overnight
+        public HourPoint[] Hourly = new HourPoint[0];   // the coming hours of the forecast
+        public string HourlyKey = "";    // changes when a new hourly forecast is read
+        public DateTime Now = DateTime.Now;              // local time of this state (which hour is "now")
+        public double Lat = double.NaN, Lon = double.NaN;   // where the forecast is for (sunrise and sunset)
 
         /// <summary>Everything that changes what is drawn, apart from where it sits (the drift).</summary>
         public string ContentKey()
@@ -43,7 +47,7 @@ namespace ClaudeCurtain
                    (Bright ? "1" : "0") + "|" + (AdminNotice ? "1" : "0") + "|" +
                    Cpu + "|" + Ram + "|" + Net + "|" + Uptime + "|" + Disk + "|" +
                    (Sys == null ? "-" : Sys.Version.ToString(CultureInfo.InvariantCulture)) + "|" +
-                   NightDim.ToString("0.00", CultureInfo.InvariantCulture) + "|" +
+                   NightDim.ToString("0.00", CultureInfo.InvariantCulture) + "|" + HourlyKey + "|" +
                    (Weather == null ? "" : string.Join("¦", Weather));
         }
 
@@ -476,6 +480,7 @@ namespace ClaudeCurtain
             s.Date = now.ToString("dddd, MMMM d");
             s.Zone = ZoneText(now);
             s.NightDim = CurtainPainter.NightFactor(now);
+            s.Now = now;
             s.AutoExit = autoExitText;
             s.PinState = gate.State;
             s.Digits = gate.Digits;
@@ -498,6 +503,10 @@ namespace ClaudeCurtain
                 s.Uptime = stats.UpFor; s.Disk = stats.Disk;
                 s.Weather = stats.Weather;
                 s.Sys = stats.Snapshot;
+                s.Hourly = stats.Hourly;
+                s.HourlyKey = stats.HourlyKey;
+                s.Lat = stats.Latitude;
+                s.Lon = stats.Longitude;
             }
 
             string key = s.Key();

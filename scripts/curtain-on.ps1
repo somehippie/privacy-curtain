@@ -112,13 +112,15 @@ Write-Host "Unlock remotely  : & '$(Join-Path $PSScriptRoot 'curtain-off.ps1')'"
 Write-Host "Event log        : & '$(Join-Path $PSScriptRoot 'curtain-log.ps1')'  (the closing time is not shown on screen)"
 Write-Host 'Keep-awake       : sleep, display-off and screen saver are on hold until the curtain closes.'
 
-# Glanceable info on screen: CPU/RAM/network, uptime and disk are live from inside the curtain; the short
-# local forecast is refreshed here in the background (keyless, never fatal) and the curtain picks it up live.
+# Glanceable info on screen: CPU/RAM/network, uptime and disk are live from inside the curtain; the local
+# forecast (three days, plus the next hours) is fetched here in the background, keyless and never fatal,
+# and refreshed every 30 minutes for as long as this curtain is up. The curtain picks each refresh up live.
 try {
     $wx = Join-Path $PSScriptRoot 'curtain-weather.ps1'
     Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @(
-        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$wx`"", '-LocalDir', "`"$LocalDir`"") | Out-Null
-    Write-Host 'On-screen info   : CPU / RAM / network, uptime, disk, and a short local forecast.'
+        '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$wx`"", '-LocalDir', "`"$LocalDir`"",
+        '-Watch', '-CurtainPid', "$($state.pid)") | Out-Null
+    Write-Host 'On-screen info   : CPU / RAM / network, uptime, disk, and the local forecast (next 6 hours and 3 days, refreshed every 30 min).'
 } catch {
     Write-Host 'On-screen info   : CPU / RAM / network, uptime, disk.'
 }

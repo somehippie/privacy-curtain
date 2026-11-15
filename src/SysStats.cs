@@ -25,6 +25,18 @@ namespace ClaudeCurtain
         private static readonly string[] None = new string[0];
 
         private readonly string weatherFile;
+        private readonly string hourlyFile;
+        private DateTime hourlyStamp;
+        private volatile HourPoint[] hourly = new HourPoint[0];
+        private volatile string hourlyKey = "";
+
+        /// <summary>The coming hours from weather-hourly.txt (empty when missing or more than a day old).</summary>
+        public HourPoint[] Hourly { get { return hourly; } }
+        public string HourlyKey { get { return hourlyKey; } }
+        private double lat = double.NaN, lon = double.NaN;
+        /// <summary>The forecast grid's centre (NaN until known), for sunrise and sunset.</summary>
+        public double Latitude { get { return lat; } }
+        public double Longitude { get { return lon; } }
         private readonly string systemDrive;
         private readonly Stopwatch clock = Stopwatch.StartNew();
 
@@ -47,6 +59,7 @@ namespace ClaudeCurtain
         public SysStats(string localDir)
         {
             weatherFile = string.IsNullOrEmpty(localDir) ? null : Path.Combine(localDir, "weather.txt");
+            hourlyFile = string.IsNullOrEmpty(localDir) ? null : Path.Combine(localDir, "weather-hourly.txt");
             string root = "C:\\";
             try { root = Path.GetPathRoot(Environment.GetFolderPath(Environment.SpecialFolder.System)); }
             catch { }
@@ -84,6 +97,7 @@ namespace ClaudeCurtain
             try { statsLine = BuildStats(); } catch { }
             try { sysLine = BuildSystem(); } catch { }
             try { ReadWeather(); } catch { }
+            try { ReadHourly(); } catch { }
             try { Publish(); } catch { }
         }
 
@@ -233,6 +247,72 @@ namespace ClaudeCurtain
             return m + "m";
         }
 
+        private void ReadHourly()
+        {
+            if (hourlyFile == null || !File.Exists(hourlyFile)) { hourly = new HourPoint[0]; hourlyKey = ""; return; }
+            DateTime stamp = File.GetLastWriteTimeUtc(hourlyFile);
+            if (stamp == hourlyStamp) return;
+            hourlyStamp = stamp;
+            if ((DateTime.UtcNow - stamp).TotalHours > 24) { hourly = new HourPoint[0]; hourlyKey = ""; return; }
+            string[] all = File.ReadAllLines(hourlyFile, Encoding.UTF8);
+            hourly = ParseHourly(all);
+            double la, lo;
+            ParseLocation(all, out la, out lo);
+            lat = la;
+            lon = lo;
+            hourlyKey = stamp.Ticks.ToString(CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// Parses weather-hourly.txt: "start TAB temperature TAB precipitation % (may be empty) TAB 1|0 (day) TAB
+        /// short forecast" per line; '#' lines are comments. Lines that do not parse are skipped.
+        /// </summary>
+        internal static HourPoint[] ParseHourly(string[] lines)
+        {
+            List<HourPoint> list = new List<HourPoint>();
+            foreach (string raw in lines ?? new string[0])
+            {
+                string line = (raw ?? "").Trim();
+                if (line.Length == 0 || line[0] == '#') continue;
+                string[] p = line.Split('\t');
+                if (p.Length < 5) continue;
+                DateTimeOffset start;
+                int temp;
+                if (!DateTimeOffset.TryParse(p[0], CultureInfo.InvariantCulture, DateTimeStyles.None, out start)) continue;
+                if (!int.TryParse(p[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out temp)) continue;
+                HourPoint h = new HourPoint();
+                h.Start = start.LocalDateTime;
+                h.Temp = temp;
+                int pop;
+                h.Pop = int.TryParse(p[2], NumberStyles.Integer, CultureInfo.InvariantCulture, out pop) ? Math.Max(0, Math.Min(100, pop)) : -1;
+                h.IsDay = p[3].Trim() != "0";
+                h.Text = p[4].Trim();
+                int hum;
+                if (p.Length > 5 && int.TryParse(p[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out hum)) h.Humidity = Math.Max(0, Math.Min(100, hum));
+                if (p.Length > 6) h.Wind = p[6].Trim();
+                list.Add(h);
+            }
+            return list.ToArray();
+        }
+
+        /// <summary>The "# location lat lon" line of weather-hourly.txt: the forecast grid's centre.</summary>
+        internal static bool ParseLocation(string[] lines, out double lat, out double lon)
+        {
+            lat = lon = double.NaN;
+            foreach (string raw in lines ?? new string[0])
+            {
+                string line = (raw ?? "").Trim();
+                if (!line.StartsWith("# location ", StringComparison.Ordinal)) continue;
+                string[] p = line.Substring(11).Split(' ');
+                if (p.Length == 2 &&
+                    double.TryParse(p[0], NumberStyles.Float, CultureInfo.InvariantCulture, out lat) &&
+                    double.TryParse(p[1], NumberStyles.Float, CultureInfo.InvariantCulture, out lon) &&
+                    Math.Abs(lat) <= 90 && Math.Abs(lon) <= 180) return true;
+                lat = lon = double.NaN;
+            }
+            return false;
+        }
+
         private void ReadWeather()
         {
             if (weatherFile == null || !File.Exists(weatherFile)) { weather = None; return; }
@@ -269,5 +349,17 @@ namespace ClaudeCurtain
         public long UptimeSeconds = -1;
         public float[] CpuHistory = new float[0];   // oldest first, one a second; negative = no reading
         public float[] NetHistory = new float[0];   // download bytes per second, same spacing
+    }
+
+    /// <summary>One hour of the hourly forecast.</summary>
+    internal sealed class HourPoint
+    {
+        public DateTime Start;     // local time
+        public int Temp;           // degrees F
+        public int Pop = -1;       // chance of precipitation, %; -1 = not given
+        public bool IsDay = true;
+        public string Text = "";   // short forecast, e.g. "Light Rain Likely"
+        public int Humidity = -1;  // relative humidity, %; -1 = not given
+        public string Wind = "";   // e.g. "5–10 mph WNW" or "Calm"
     }
 }

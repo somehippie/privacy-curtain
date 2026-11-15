@@ -4,7 +4,7 @@ A black screen that covers every monitor and blocks the physical keyboard and mo
 (injected) clicks, typing and screenshots keep working underneath. It's for hiding an automated session on
 a machine you share a room with, without taking the machine away from yourself.
 
-![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone, the message "PC in use by Claude", and a data column with ten-minute CPU and network sparklines, memory and disk bars, and a three-day forecast](docs/curtain.png)
+![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone, the message "PC in use by Claude", and a data column with ten-minute CPU and network sparklines, memory and disk bars, then the forecast: humidity, wind, sunrise and sunset, the next six hours as a temperature curve over rain-chance bars, and three days](docs/curtain.png)
 
 Awareness, not lockout: it counts and logs every blocked key press, click and escape attempt, can ping your
 phone while someone is at the keyboard, and shows a "While you were away" summary when you unlock. The
@@ -146,7 +146,7 @@ them together stay under about 1.8 MB:
 | `events.log` | 1 MB, trimmed to the newest 600 KB | about 10 days of round-the-clock curtain, far longer with normal use |
 | `curtain.log` (diagnostics) | 512 KB, trimmed to the newest 128 KB | weeks |
 | `alerts.log` | 256 KB, trimmed to the newest 160 KB | thousands of alerts |
-| `last-summary.txt`, `last-summary-timeline.txt`, `last-exit.json`, `weather.txt` | one small file each, overwritten (the timeline holds at most 5,000 moments, about 60 KB) | the last run only |
+| `last-summary.txt`, `last-summary-timeline.txt`, `last-exit.json`, `weather.txt`, `weather-hourly.txt` | one small file each, overwritten (the timeline holds at most 5,000 moments, about 60 KB) | the last run only |
 | `test\report-*.txt` | the 10 newest are kept | the last 10 test runs |
 
 Your own unlock is not counted as someone at the keyboard. The key presses of the PIN entry that unlocked
@@ -183,9 +183,17 @@ about what it is doing. Everything on it comes from one proportional system buil
 ![The curtain with its construction drawn on top: the two columns in the ratio φ : 1, the margins above and below in the ratio 1 : φ, and each text size labelled as the clock size over a power of φ](docs/construction.png)
 
 - **Grid.** On a landscape screen the composition is two columns in the ratio φ : 1: the time and the
-  message on the left, live data on the right, a hairline between them. The data column's first label
-  sits on the same line as the top of the digits. On a portrait screen the data moves under the message.
-  The composition rests on the golden section of the screen: the space above it and below it are 1 : φ.
+  message on the left, live data on the right, a hairline between them. Both columns share a top edge
+  (the data column's first label sits level with the top of the digits) and a bottom edge (the message's
+  last line sits level with the forecast's last line), so the clock heads the page, the message anchors
+  it, and typed PIN dots appear in the open space between. On a portrait screen the data moves under the
+  message. The composition rests on the golden section of the screen: the space above it and below it
+  are 1 : φ.
+- **A fixed frame.** Every slot is sized for the widest value it can ever hold (CPU "100%", a network
+  rate of "999.9 KB/s", the widest time the clock's digits can make, "WEDNESDAY", "−99°"), and the image
+  size comes from the grid, never from the ink. Changing numbers therefore never resize or move the
+  composition; the self-tests prove it by laying out wildly different readings, times and forecasts and
+  requiring the same frame to the pixel.
 - **Type.** One family, Bahnschrift, a DIN design that ships with Windows, from Light for the clock to
   Regular for data. Every size is the clock size divided by a power of φ, and every gap is a step on the
   same scale. Large type is aligned by its ink rather than its side bearing, the colon is lifted to the
@@ -194,8 +202,11 @@ about what it is doing. Everything on it comes from one proportional system buil
 - **Data.** CPU and download rate are ten-minute sparklines with the newest reading at the right and a dot
   on it; memory and disk are proportion bars. CPU is drawn on a fixed 0–100% scale, so a quiet machine
   looks quiet. Every value is also printed as text beside its graphic, so nothing depends on reading a
-  chart. The forecast is a table with weather symbols drawn in code (sun, moon, cloud, partly cloudy,
-  rain, storm, snow, fog, wind) and a droplet beside the chance of rain.
+  chart. The forecast opens with four quiet tiles (humidity and wind for this hour, the next sunrise and
+  sunset), then the next six hours as a strip: each hour's symbol, its temperature on one smooth curve
+  (drawn on at least a 6° range, so a flat afternoon looks flat), and its chance of rain as a bar. Then
+  three days. Rain is the one cool data hue, a muted steel blue. Weather symbols are drawn in code (sun,
+  moon, cloud, partly cloudy, rain, storm, snow, fog, wind).
 - **Colour.** Warm neutrals in four text tones and one accent, the short terracotta rule. The self-tests
   compute each tone's contrast on black: every text tone meets WCAG AA (the faintest labels are 4.9 : 1)
   and body text and values meet AAA (7.7 : 1). Overnight (10:30 PM to 6:30 AM, with hour-long ramps) the
@@ -232,16 +243,21 @@ The data column:
 - **Machine stats**, live from inside the curtain (sampled once a second, no performance counters, no
   admin): CPU busy %, memory used, download and upload rates, used share of the system drive, and system
   uptime, with ten minutes of history kept in memory for the sparklines.
-- **A short local forecast.** Set your location in `config.json` (copy `config.example.json`):
+- **The local forecast.** Humidity, wind, the next sunrise and sunset, the next six hours, and three days.
+  Set your location in `config.json` (copy `config.example.json`):
 
   ```json
   { "grid": "ABC/12,34", "place": "Your City", "wuApiKey": "" }
   ```
 
   Find your `grid` at `https://api.weather.gov/points/<lat>,<lon>` (read `gridId`, `gridX`, `gridY`).
-  `curtain-weather.ps1` then writes three days to `local\weather.txt`, and the curtain reads that file and
-  refreshes whenever it changes. `curtain-on.ps1` runs the fetch in the background at start; you can also
-  run it any time:
+  `curtain-weather.ps1` then writes three days to `local\weather.txt` and the next twelve hours (with
+  humidity, wind and the forecast grid's location) to `local\weather-hourly.txt`; the curtain reads both
+  and refreshes whenever they change. `curtain-on.ps1` starts it in the background with the curtain's
+  process ID: it refreshes every 30 minutes while that curtain is up, so a 12- or 24-hour session always
+  shows the hours actually ahead, and exits when the curtain closes. The curtain process itself never
+  touches the network. Sunrise and sunset are worked out on the PC from the grid's coordinates with NOAA's
+  solar equations, accurate to about a minute. You can also run the fetch any time:
 
   ```powershell
   .\scripts\curtain-weather.ps1
@@ -288,10 +304,11 @@ Please read these before relying on the curtain.
 ```
 
 They use a throwaway PIN in `local\test` and never touch the real one, and they never call your notify
-hook. The self-tests (~86 checks, including PIN hashing/entry rules, which key presses belong to your own
+hook. The self-tests (~92 checks, including PIN hashing/entry rules, which key presses belong to your own
 unlock, the time-zone label, the stats sampler, weather-file reading, and the design: every state rendered
 at 720p, 1080p, 16:10, 1440p, ultrawide and portrait, fitting the screen, the columns exactly φ : 1,
-staying on screen through 8 hours of drift, every text tone's WCAG contrast, and the animations starting
+staying on screen through 8 hours of drift, a fixed frame whatever the readings, the hourly forecast file,
+sunrise and sunset against published times, every text tone's WCAG contrast, and the animations starting
 and settling) and the full lifecycle suite (100+ checks: a screenshot seeing the
 desktop through the curtain, injected clicks and typing passing through, simulated shutdown, every hang
 being recovered, the keep-awake request appearing with the curtain and vanishing with it, the alerts, the

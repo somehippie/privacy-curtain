@@ -358,6 +358,87 @@ namespace ClaudeCurtain
             Check("painter: the drift keeps everything on screen for 8 hours" + (allOnScreen ? "" : " (" + worst + ")"), allOnScreen);
             Check("painter: a re-render takes under 150 ms", slowestMs < 150);
 
+            // Stable geometry: wildly different readings, times and forecasts must give the very same frame.
+            {
+                Options po = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") };
+                List<DisplayState> variants = new List<DisplayState>();
+                variants.Add(CurtainPreview.Sample(po, "idle"));
+                DisplayState big = CurtainPreview.Sample(po, "idle");
+                big.Clock = "12:59 PM";
+                big.Date = "Wednesday, September 30";
+                big.Zone = "PDT, GMT−7";
+                SysSnapshot x = CurtainPreview.SampleSys();
+                x.Version = 2; x.Cpu = 100; x.MemPercent = 100; x.MemUsedGb = 99.9; x.MemTotalGb = 999;
+                x.NetDown = 99.9 * 1048576; x.NetUp = 99.9 * 1048576; x.DiskUsedPercent = 100; x.DiskFreeGb = 9999;
+                x.UptimeSeconds = 99L * 86400 + 23 * 3600;
+                big.Sys = x;
+                foreach (HourPoint hp in big.Hourly) { hp.Temp = hp.Temp > 57 ? 105 : -9; hp.Pop = 100; }
+                big.Weather = new[]
+                {
+                    "Anytown forecast  (as of 12:59 PM)",
+                    "Wednesday:  Hi 105° / Lo -9°   Chance Showers And Thunderstorms Then Patchy Blowing Dust  (100% precip)",
+                    "Thursday:  Hi 99° / Lo 88°   Sunny  (100% precip)",
+                    "Saturday:  Hi 99° / Lo 88°   Sunny",
+                };
+                variants.Add(big);
+                DisplayState small = CurtainPreview.Sample(po, "idle");
+                small.Clock = "1:01 AM";
+                small.Sys = new SysSnapshot();   // nothing measured yet
+                small.Hourly = new HourPoint[0];  // no hourly forecast yet
+                small.Weather = new[] { "Anytown forecast  (as of 1:01 AM)", "Tonight:  Lo 4°   Clear" };
+                variants.Add(small);
+                variants.Add(CurtainPreview.Sample(po, "typing"));
+                bool stable = true;
+                string first = null, diff = "";
+                foreach (Size scr in new[] { new Size(2560, 1440), new Size(1920, 1080), new Size(1080, 1920) })
+                {
+                    first = null;
+                    foreach (DisplayState v in variants)
+                    {
+                        CurtainPainter.Layout l = CurtainPainter.Compose(v, scr.Width, scr.Height);
+                        string g = l.Block.Width + "x" + l.Block.Height + " " + l.LeftCol + " " + l.RightCol;
+                        l.Dispose();
+                        if (first == null) first = g;
+                        else if (g != first) { stable = false; diff = scr.Width + "x" + scr.Height + ": " + first + " vs " + g; }
+                        if (!stable) lines.Add("INFO  geometry " + scr.Width + "x" + scr.Height + " variant " + variants.IndexOf(v) + ": " + g);
+                    }
+                }
+                Check("painter: changing readings, times and forecasts never resize or move the composition" + (stable ? "" : " (" + diff + ")"), stable);
+            }
+
+            // The hourly forecast file.
+            {
+                HourPoint[] h = SysStats.ParseHourly(new[]
+                {
+                    "# hourly forecast for Anytown, as of 1:07 PM",
+                    "2026-11-15T13:00:00-08:00\t64\t9\t1\tMostly Cloudy",
+                    "2026-11-15T19:00:00-08:00\t61\t\t0\tLight Rain",
+                    "not a forecast line",
+                });
+                Check("hourly: the forecast file is read (comment and bad lines skipped, a missing rain chance kept as unknown)",
+                      h.Length == 2 && h[0].Temp == 64 && h[0].Pop == 9 && h[0].IsDay && h[1].Pop == -1 && !h[1].IsDay && h[1].Text == "Light Rain");
+                DateTime now = new DateTime(2026, 11, 15, 10, 42, 0);
+                HourPoint[] next = CurtainPainter.NextHours(CurtainPreview.SampleHourly(now), now, 6);
+                Check("hourly: the strip starts at the current hour and shows six", next.Length == 6 && next[0].Start.Hour == 10 && next[5].Start.Hour == 15);
+                HourPoint[] full = SysStats.ParseHourly(new[] { "2026-11-15T13:00:00-08:00\t64\t9\t1\tMostly Cloudy\t79\t5–10 mph S" });
+                double la, lo;
+                bool located = SysStats.ParseLocation(new[] { "# hourly forecast", "# location 45.0000 -122.0000" }, out la, out lo);
+                Check("hourly: humidity, wind and the grid's location are read",
+                      full.Length == 1 && full[0].Humidity == 79 && full[0].Wind == "5–10 mph S" && located && Math.Abs(la - 45.0) < 1e-6 && Math.Abs(lo + 122.0) < 1e-6);
+                // Sunrise and sunset against published values: London on 21 June 2026 (03:43 and 20:21 UTC)
+                // and New York on 15 November 2026 (11:42 and 21:38 UTC, cross-checked with the Julian-date sunrise equation).
+                DateTime r1, s1, r2, s2;
+                bool london = CurtainPainter.SunTimesUtc(new DateTime(2026, 6, 21), 51.5074, -0.1278, out r1, out s1);
+                bool newYork = CurtainPainter.SunTimesUtc(new DateTime(2026, 11, 15), 40.7128, -74.0060, out r2, out s2);
+                Func<DateTime, DateTime, bool> near = (got, want) => Math.Abs((got - want).TotalMinutes) <= 3;
+                Check("sun: sunrise and sunset match published times within 3 minutes",
+                      london && newYork &&
+                      near(r1, new DateTime(2026, 6, 21, 3, 43, 0, DateTimeKind.Utc)) && near(s1, new DateTime(2026, 6, 21, 20, 21, 0, DateTimeKind.Utc)) &&
+                      near(r2, new DateTime(2026, 11, 15, 11, 42, 0, DateTimeKind.Utc)) && near(s2, new DateTime(2026, 11, 15, 21, 38, 0, DateTimeKind.Utc)));
+                DateTime lr, ls;
+                Check("sun: no sunrise or sunset is shown during the polar night", !CurtainPainter.SunTimesUtc(new DateTime(2026, 12, 21), 78.22, 15.65, out lr, out ls));
+            }
+
             // Colour: every text tone readable on black (WCAG AA 4.5:1); body text and values AAA (7:1).
             bool aa = true;
             string weakest = "";

@@ -21,7 +21,7 @@ namespace ClaudeCurtain
     ///         divided by a power of φ; every gap is a step on the same scale. Large type is aligned by its
     ///         ink rather than its side bearing, the colon sits on the optical centre of the digits, and
     ///         small capitals are letter-spaced.
-    /// Data    Ten-minute sparklines for CPU and network, proportion bars for memory and disk, and a
+    /// Data    Ten-minute sparklines for CPU and network, proportion bars for memory and disk, the next six hours (temperature curve, rain bars), and a
     ///         forecast table with weather symbols drawn in code. Values are always printed as text beside
     ///         their graphic, so nothing depends on reading a chart.
     /// Colour  Warm neutrals in four text tones plus one accent. Contrast on black is checked by the
@@ -55,6 +55,7 @@ namespace ClaudeCurtain
         internal static readonly Color Accent = Color.FromArgb(217, 119, 87);      // the one accent: the rule
         internal static readonly Color Wrong = Color.FromArgb(234, 116, 104);
         internal static readonly Color Warn = Color.FromArgb(224, 178, 98);
+        internal static readonly Color Rain = Color.FromArgb(112, 148, 178);      // the one data hue: chance of rain
 
         /// <summary>Every colour used for text, with the contrast on black it must reach.</summary>
         internal static readonly KeyValuePair<string, Color>[] TextTones =
@@ -312,7 +313,7 @@ namespace ClaudeCurtain
 
         private sealed class Op
         {
-            public int Kind;            // 0 text, 1 rect, 2 dot, 3 weather symbol, 4 sparkline, 5 bar, 6 droplet
+            public int Kind;            // 0 text, 1 rect, 2 dot, 3 weather symbol, 4 sparkline, 5 bar, 6 droplet, 7 rain bar, 8 curve
             public string Text;
             public Font Font;
             public float Ascent;
@@ -422,6 +423,16 @@ namespace ClaudeCurtain
                     float y = fClock.CapHeight;
                     L.Baselines.Add(new KeyValuePair<string, float>("C", y));
                     float leftW = AddClock(ops, m, s.Clock ?? "", fClock, fSuffix, hero, track, y, st(6), L);
+                    // ...but sized for the widest time it can ever show, so the minute turning moves nothing.
+                    string clockText = L.ClockText;
+                    bool twelve = (s.Clock ?? "").Trim().IndexOf(' ') > 0;
+                    // Bahnschrift's figures are proportional, so the widest time is built from the widest
+                    // digit each position allows (hour tens 0-2, minute tens 0-5), measured, not assumed.
+                    string any = WidestDigit(m, fClock.Font, "0123456789"), tens = WidestDigit(m, fClock.Font, "012345");
+                    string widest = (twelve ? "1" + WidestDigit(m, fClock.Font, "012") : WidestDigit(m, fClock.Font, "012") + any) + ":" + tens + any;
+                    foreach (string suffix in twelve ? new[] { " AM", " PM" } : new[] { "" })
+                        leftW = Math.Max(leftW, AddClock(new List<Op>(), m, widest + suffix, fClock, fSuffix, hero, track, y, st(6), L));
+                    L.ClockText = clockText;
 
                     string date = (s.Date ?? "").ToUpperInvariant();
                     string zone = (s.Zone ?? "").Replace(",", "").ToUpperInvariant();
@@ -434,38 +445,51 @@ namespace ClaudeCurtain
                         x += AddText(ops, m, zone, fLabel, Tertiary, x, y, track);
                     }
                     leftW = Math.Max(leftW, x);
+                    leftW = Math.Max(leftW, Measure(m, "WEDNESDAY, SEPTEMBER 30   \u00B7   PDT GMT\u22127", fLabel.Font, track));
 
-                    y += st(3);
+                    // The message (rule, title, two lines) and the PIN row are measured now and placed after the
+                    // data column: on a landscape screen the message's last line sits level with the data
+                    // column's last line, so both columns share a top and a bottom edge, with the clock at the
+                    // top, the message at the foot, and the PIN row just above the message.
+                    float yDate = y;
                     float ruleW = (float)Math.Round(c / (Phi * Phi)), ruleH = Math.Max(1f, (float)Math.Round(unit / 70f));
-                    L.Rule = new RectangleF(0, (float)Math.Round(y), ruleW, ruleH);
-                    y += ruleH + st(3) + fTitle.CapHeight;
                     string title = "PC in use by Claude";
-                    L.Baselines.Add(new KeyValuePair<string, float>("C / φ⁴", y));
-                    leftW = Math.Max(leftW, AddText(ops, m, title, fTitle, Primary, -InkLeft(title, fTitle), y, 0));
-
-                    y += st(5) + fBody.CapHeight;
-                    L.Baselines.Add(new KeyValuePair<string, float>("C / φ⁵", y));
                     string l1 = "Keyboard and mouse are locked while Claude works.";
                     string l2 = "Any attempt to use, unlock or interrupt this PC is logged.";
-                    leftW = Math.Max(leftW, AddText(ops, m, l1, fBody, s.Bright ? hero : Secondary, 0, y, 0));
-                    y += fBody.Font.Size * 1.5f;
-                    leftW = Math.Max(leftW, AddText(ops, m, l2, fBody, Secondary, 0, y, 0));
-                    float textBottom = y + fBody.Font.Size * 0.3f;
-
-                    // The PIN row is drawn live (it animates); here it only gets its reserved space.
+                    float msgH = ruleH + st(3) + fTitle.CapHeight + st(5) + fBody.CapHeight + fBody.Font.Size * 1.5f;
                     L.DotSize = Math.Max(6f, (float)Math.Round(st(6.5)));
-                    y += st(3);
-                    L.PinX = 0;
-                    L.PinDotsY = y + L.DotSize / 2f;
-                    y += Math.Max(L.DotSize, fBody.CapHeight) + st(5) + fLabel.CapHeight;
-                    L.PinHintBaseline = y;
+                    float dotRow = Math.Max(L.DotSize, fBody.CapHeight);
+                    float pinH = dotRow + st(5) + fLabel.CapHeight;
+                    leftW = Math.Max(leftW, Measure(m, title, fTitle.Font, 0) - InkLeft(title, fTitle));
+                    leftW = Math.Max(leftW, Measure(m, l1, fBody.Font, 0));
+                    leftW = Math.Max(leftW, Measure(m, l2, fBody.Font, 0));
                     leftW = Math.Max(leftW, Measure(m, HintText, fLabel.Font, track));
                     leftW = Math.Max(leftW, Measure(m, AdminText, fSmall.Font, 0));
-                    float leftBottom = y + fLabel.Font.Size * 0.35f;
 
-                    // ---------------- right column: measured first, then placed on the grid
+                    // ---------------- right column: measured, then placed on the grid
                     float need = RightColumn(null, m, s, fData, fLabel, fSmall, track, unit, st, 0, 0, 0);
                     L.HasRight = need > 0;
+                    float lastLine = yDate + st(3) + pinH + st(3) + msgH;   // the message's last baseline, laid out naturally
+                    if (L.HasRight && landscape)
+                    {
+                        float rightH = RightColumn(new List<Op>(), m, s, fData, fLabel, fSmall, track, unit, st, need, 0, 0);
+                        lastLine = Math.Max(lastLine, rightH - fSmall.Font.Size * 0.35f);
+                    }
+                    float ruleTop = (float)Math.Round(lastLine - msgH);
+                    L.Rule = new RectangleF(0, ruleTop, ruleW, ruleH);
+                    L.PinX = 0;
+                    L.PinHintBaseline = ruleTop - st(3);
+                    L.PinDotsY = L.PinHintBaseline - fLabel.CapHeight - st(5) - dotRow / 2f;
+                    y = ruleTop + ruleH + st(3) + fTitle.CapHeight;
+                    L.Baselines.Add(new KeyValuePair<string, float>("C / \u03C6\u2074", y));
+                    AddText(ops, m, title, fTitle, Primary, -InkLeft(title, fTitle), y, 0);
+                    y += st(5) + fBody.CapHeight;
+                    L.Baselines.Add(new KeyValuePair<string, float>("C / \u03C6\u2075", y));
+                    AddText(ops, m, l1, fBody, s.Bright ? hero : Secondary, 0, y, 0);
+                    y += fBody.Font.Size * 1.5f;
+                    AddText(ops, m, l2, fBody, Secondary, 0, y, 0);
+                    float leftBottom = y + fBody.Font.Size * 0.3f;
+
                     float leftColW = leftW, rightW = 0, colX = 0, colY = 0;
                     if (L.HasRight)
                     {
@@ -488,28 +512,19 @@ namespace ClaudeCurtain
                     if (L.HasRight && landscape)
                     {
                         float top = -fClock.CapHeight * 0.02f;
-                        float bottom = Math.Max(textBottom, rightBottom);
+                        float bottom = Math.Max(leftBottom, rightBottom);
                         ops.Add(new Op { Kind = 1, X = (float)Math.Round(leftColW + st(2) / 2f), Y = top, W = 1, H = bottom - top, Color = RuleColor });
                     }
                     L.LeftCol = new RectangleF(0, 0, leftColW, leftBottom);
                     L.RightCol = L.HasRight ? new RectangleF(colX, colY, rightW, rightBottom - colY) : RectangleF.Empty;
                 }
 
-                // ---------------- render everything into one bitmap
-                float minX = 0, minY = 0, maxX = 0, maxY = 0;
-                using (Bitmap probe = new Bitmap(1, 1))
-                using (Graphics m = Graphics.FromImage(probe))
-                {
-                    foreach (Op op in ops)
-                    {
-                        RectangleF r = Bounds(m, op);
-                        minX = Math.Min(minX, r.Left); minY = Math.Min(minY, r.Top);
-                        maxX = Math.Max(maxX, r.Right); maxY = Math.Max(maxY, r.Bottom);
-                    }
-                }
-                maxX = Math.Max(maxX, Math.Max(L.LeftCol.Right, L.RightCol.Right));
-                maxY = Math.Max(maxY, L.PinHintBaseline + fLabel.Font.Size * 0.35f);
-                int pad = (int)Math.Ceiling(unit * 0.2f);
+                // ---------------- render everything into one bitmap. Its size comes from the grid (the
+                // columns), never from the ink, so changing content can never resize or move it.
+                float minX = 0, minY = 0;
+                float maxX = Math.Max(L.LeftCol.Right, L.RightCol.Right);
+                float maxY = Math.Max(L.LeftCol.Bottom, L.RightCol.Bottom);
+                int pad = (int)Math.Ceiling(unit * 0.25f);
                 L.OriginX = (float)Math.Round(-minX + pad);
                 L.OriginY = (float)Math.Round(-minY + pad);
                 int bw = (int)Math.Ceiling(maxX - minX) + 2 * pad;
@@ -566,9 +581,12 @@ namespace ClaudeCurtain
         }
 
         /// <summary>
-        /// The data column: a SYSTEM table (value, ten-minute chart or bar, note) and a FORECAST table. With
-        /// ops null it only measures and returns the width it needs; otherwise it lays the tables out at the
-        /// given width and position and returns the bottom edge.
+        /// The data column: a SYSTEM table (value, ten-minute chart or bar, note), then the FORECAST: the next
+        /// six hours as a strip (temperature curve, rain-chance bars) and the next three days. Every width and
+        /// height comes from templates of the widest content a slot can hold, never from the live values, so
+        /// changing numbers can never resize or move the composition. With ops null it only measures and
+        /// returns the width it needs; otherwise it lays everything out at the given width and position and
+        /// returns the bottom edge.
         /// </summary>
         private static float RightColumn(List<Op> ops, Graphics m, DisplayState s, Face fData, Face fLabel, Face fSmall,
                                          float track, float unit, Func<double, float> st, float width, float ox, float oy)
@@ -583,31 +601,31 @@ namespace ClaudeCurtain
             List<object[]> rows = SystemRows(s);
             if (rows.Count > 0)
             {
-                float labelW = 0, valueW = 0, noteW = 0, graphW = (float)Math.Round(unit * 1.3f);
-                bool anyGraph = false;
-                foreach (object[] r in rows)
+                bool graphs = s.Sys != null;
+                float labelW = 0, valueW = 0, noteW = 0, graphW = graphs ? (float)Math.Round(unit * 1.3f) : 0;
+                foreach (string t in new[] { "CPU", "MEMORY", "NETWORK", "DISK", "UPTIME" }) labelW = Math.Max(labelW, Measure(m, t, fLabel.Font, track));
+                foreach (string t in new[] { "100%", "↓ 999.9 KB/s", "↓ 99.9 MB/s", "99d 23h", "--" }) valueW = Math.Max(valueW, Measure(m, t, fData.Font, 0));
+                foreach (string t in new[] { "99.9 / 999 GB", "↑ 999.9 KB/s", "↑ 99.9 MB/s", "9999 GB free" }) noteW = Math.Max(noteW, Measure(m, t, fSmall.Font, 0));
+                if (!graphs)
                 {
-                    labelW = Math.Max(labelW, Measure(m, (string)r[0], fLabel.Font, track));
-                    valueW = Math.Max(valueW, Measure(m, (string)r[1], fData.Font, 0));
-                    noteW = Math.Max(noteW, Measure(m, (string)r[4], fSmall.Font, 0));
-                    anyGraph |= r[2] != null;
+                    // Plain strings only (no numbers): size for what is there.
+                    foreach (object[] r in rows) valueW = Math.Max(valueW, Measure(m, (string)r[1], fData.Font, 0));
+                    noteW = 0;
                 }
-                if (!anyGraph) graphW = 0;
-                float tableW = labelW + gx + valueW + (anyGraph ? gx + graphW : 0) + (noteW > 0 ? gx + noteW : 0);
-                bool hasHistory = s.Sys != null && s.Sys.CpuHistory.Length > 1;
-                string side = hasHistory ? "LAST " + Math.Max(1, (int)Math.Round(Math.Min(s.Sys.CpuHistory.Length, SysStats.HistoryLength) / 60.0)) + " MIN" : "";
+                float tableW = labelW + gx + valueW + (graphs ? gx + graphW + gx + noteW : 0);
+                const string side = "LAST 10 MIN";
                 tableW = Math.Max(tableW, Measure(m, "SYSTEM", fLabel.Font, track) + gx + Measure(m, side, fLabel.Font, track));
                 needed = Math.Max(needed, tableW);
                 float w = Math.Max(width, tableW);
 
                 y += fLabel.CapHeight;
                 AddText(ops, m, "SYSTEM", fLabel, Tertiary, ox, y, track);
-                if (side.Length > 0) AddText(ops, m, side, fLabel, Tertiary, ox + w - Measure(m, side, fLabel.Font, track), y, track);
+                if (graphs) AddText(ops, m, side, fLabel, Tertiary, ox + w - Measure(m, side, fLabel.Font, track), y, track);
                 y += st(6) * 0.8f;
                 ops.Add(new Op { Kind = 1, X = ox, Y = (float)Math.Round(y), W = w, H = 1, Color = RuleColor });
                 y += st(5) + fData.CapHeight;
                 float pitch = fData.Font.Size * 1.8f;
-                float vx = ox + labelW + gx, gx0 = vx + valueW + gx, nx = gx0 + (anyGraph ? graphW + gx : 0);
+                float vx = ox + labelW + gx, gx0 = vx + valueW + gx, nx = gx0 + graphW + gx;
                 foreach (object[] r in rows)
                 {
                     AddText(ops, m, (string)r[0], fLabel, Tertiary, ox, y, track);
@@ -623,7 +641,7 @@ namespace ClaudeCurtain
                         float bh = Math.Max(4f, (float)Math.Round(unit / 24f));
                         ops.Add(new Op { Kind = 5, X = gx0, Y = (float)Math.Round(y - fData.CapHeight / 2f - bh / 2f), W = graphW, H = bh, Value = (double)r[2], Color = Secondary });
                     }
-                    if (((string)r[4]).Length > 0) AddText(ops, m, (string)r[4], fSmall, Tertiary, nx, y, 0);
+                    if (graphs && ((string)r[4]).Length > 0) AddText(ops, m, (string)r[4], fSmall, Tertiary, nx, y, 0);
                     y += pitch;
                 }
                 y += -pitch + fData.Font.Size * 0.3f;
@@ -653,30 +671,26 @@ namespace ClaudeCurtain
                     rm.Groups["pop"].Success ? rm.Groups["pop"].Value + "%" : "",
                 });
             }
-            if (raw.Count > 0)
+            HourPoint[] hours = NextHours(s.Hourly, s.Now, 6);
+            bool haveDays = raw.Count > 0, haveHours = s.Hourly != null && s.Hourly.Length > 0;
+            if (haveDays || haveHours)
             {
                 if (rows.Count > 0) y += st(3);
                 string head = "FORECAST" + (place != null ? "   ·   " + place.ToUpperInvariant() : "");
                 string side = asOf != null ? "AS OF " + asOf.ToUpperInvariant() : "";
-                float headW = Measure(m, head, fLabel.Font, track) + (side.Length > 0 ? gx + Measure(m, side, fLabel.Font, track) : 0);
+                float headW = Measure(m, head, fLabel.Font, track) + gx + Measure(m, "AS OF 12:59 PM", fLabel.Font, track);
                 float line2 = st(5) * 0.95f;
                 float icon = (float)Math.Round(fData.CapHeight + line2);
                 float tx = icon + gx * 0.75f;
-                float dayW = 0, hiW = 0, loW = 0, popW = 0;
                 float drop = (float)Math.Round(fData.CapHeight * 0.95f);
-                if (parsed)
-                {
-                    foreach (string[] r in wx)
-                    {
-                        dayW = Math.Max(dayW, Measure(m, r[0].ToUpperInvariant(), fLabel.Font, track));
-                        hiW = Math.Max(hiW, Measure(m, r[1], fData.Font, 0));
-                        loW = Math.Max(loW, Measure(m, r[2], fData.Font, 0));
-                        if (r[4].Length > 0) popW = Math.Max(popW, drop * 0.62f + gx * 0.25f + Measure(m, r[4], fData.Font, 0));
-                    }
-                }
-                float rowW = tx + dayW + gx + hiW + gx * 0.6f + loW + (popW > 0 ? gx + popW : 0);
-                if (!parsed) { rowW = 0; foreach (string r in raw) rowW = Math.Max(rowW, Measure(m, r, fSmall.Font, 0)); }
-                float tableW = Math.Max(rowW, headW);
+                float dayW = Measure(m, "WEDNESDAY", fLabel.Font, track);
+                float tempW = Measure(m, "-99°", fData.Font, 0);
+                float popW = drop * 0.62f + gx * 0.25f + Measure(m, "100%", fData.Font, 0);
+                float rowW = tx + dayW + gx + tempW + gx * 0.6f + tempW + gx + popW;
+                float slotMin = Math.Max(Measure(m, "12 PM", fLabel.Font, track), Measure(m, "100%", fData.Font, 0)) + gx * 0.6f;
+                float tableW = Math.Max(Math.Max(rowW, headW), 6 * slotMin);
+                for (int i = 0; i < 4; i++)
+                    tableW = Math.Max(tableW, (Measure(m, TileTemplates[i], fData.Font, 0) + gx * 0.4f) / TileShare[i]);
                 needed = Math.Max(needed, tableW);
                 float w = Math.Max(width, tableW);
 
@@ -685,68 +699,216 @@ namespace ClaudeCurtain
                 if (side.Length > 0) AddText(ops, m, side, fLabel, Tertiary, ox + w - Measure(m, side, fLabel.Font, track), y, track);
                 y += st(6) * 0.8f;
                 ops.Add(new Op { Kind = 1, X = ox, Y = (float)Math.Round(y), W = w, H = 1, Color = RuleColor });
-                y += st(5) + fData.CapHeight;
-                if (parsed)
+
+                // ---- right now: humidity and wind for this hour, the next sunrise and sunset (four quiet tiles)
                 {
-                    foreach (string[] r in wx)
+                    HourPoint nowHour = hours.Length > 0 ? hours[0] : null;
+                    DateTime rise, set;
+                    bool sun = NextSun(s.Now, s.Lat, s.Lon, out rise, out set);
+                    string[] values =
                     {
+                        nowHour != null && nowHour.Humidity >= 0 ? nowHour.Humidity.ToString(CultureInfo.InvariantCulture) + "%" : "--",
+                        nowHour != null && nowHour.Wind.Length > 0 ? nowHour.Wind : "--",
+                        sun ? rise.ToString("t", CultureInfo.CurrentCulture) : "--",
+                        sun ? set.ToString("t", CultureInfo.CurrentCulture) : "--",
+                    };
+                    y += st(5) + fLabel.CapHeight;
+                    float vy = y + st(6) + fData.CapHeight;
+                    float tx0 = ox;
+                    for (int i = 0; i < 4; i++)
+                    {
+                        float tw = w * TileShare[i];
+                        AddText(ops, m, TileLabels[i], fLabel, Tertiary, tx0, y, track);
+                        Op v = AddTextOp(ops, values[i], fData, Secondary, tx0, vy, 0);
+                        if (Measure(m, values[i], fData.Font, 0) > tw - gx * 0.4f) v.W = tw - gx * 0.4f;   // never into the next tile
+                        tx0 += tw;
+                    }
+                    y = vy + fData.Font.Size * 0.3f;
+                }
+
+                // ---- the next six hours: hour, symbol, temperature on a curve, chance of rain
+                y += st(4.5) + fLabel.CapHeight;
+                AddText(ops, m, "NEXT 6 HOURS", fLabel, Tertiary, ox, y, track);
+                float slot = w / 6f;
+                float hourBase = y + st(5) + fLabel.CapHeight;
+                float iconSz = (float)Math.Round(fData.CapHeight * 2.0f);
+                float iconTop = hourBase + st(6);
+                float curveTop = iconTop + iconSz + st(6) + fData.CapHeight + st(6.5);
+                float curveH = (float)Math.Round(st(4) * 0.85f);
+                float curveBottom = curveTop + curveH;
+                float barMax = (float)Math.Round(st(4.4));
+                float barBase = curveBottom + st(5.5) + barMax;
+                float popBase = barBase + st(6.5) + fLabel.CapHeight;
+                if (hours.Length > 0)
+                {
+                    int tmin = int.MaxValue, tmax = int.MinValue;
+                    foreach (HourPoint hp in hours) { tmin = Math.Min(tmin, hp.Temp); tmax = Math.Max(tmax, hp.Temp); }
+                    double lo = tmin, hi = tmax;
+                    if (hi - lo < 6) { double mid = (hi + lo) / 2; lo = mid - 3; hi = mid + 3; }   // a flat day should look flat
+                    float[] curve = new float[hours.Length * 2];
+                    float bw = Math.Max(4f, (float)Math.Round(slot * 0.14f));
+                    for (int i = 0; i < hours.Length; i++)
+                    {
+                        HourPoint hp = hours[i];
+                        float cx = ox + slot * (i + 0.5f);
+                        string when = i == 0 ? "NOW" : HourLabel(hp.Start);
+                        AddCentered(ops, m, when, fLabel, i == 0 ? Secondary : Tertiary, cx, hourBase, track);
+                        ops.Add(new Op { Kind = 3, Text = Symbol(hp.Text, !hp.IsDay), X = cx - iconSz / 2f, Y = iconTop, W = iconSz, H = iconSz, Color = Secondary });
+                        float py = curveBottom - (float)((hp.Temp - lo) / (hi - lo)) * curveH;
+                        curve[2 * i] = cx;
+                        curve[2 * i + 1] = py;
+                        AddCentered(ops, m, hp.Temp.ToString(CultureInfo.InvariantCulture) + "°", fData, i == 0 ? Hero : Primary, cx, py - st(6.5), 0);
+                        if (hp.Pop >= 0)
+                        {
+                            float bh = Math.Max(1f, (float)Math.Round(barMax * hp.Pop / 100f));
+                            ops.Add(new Op { Kind = 7, X = (float)Math.Round(cx - bw / 2f), Y = barBase - bh, W = bw, H = bh, Color = Rain });
+                        }
+                        AddCentered(ops, m, hp.Pop >= 0 ? hp.Pop.ToString(CultureInfo.InvariantCulture) + "%" : "–", fLabel, Tertiary, cx, popBase, 0);
+                    }
+                    ops.Add(new Op { Kind = 8, Data = curve, Color = Secondary });
+                    ops.Add(new Op { Kind = 1, X = ox, Y = (float)Math.Round(barBase), W = w, H = 1, Color = Track });
+                }
+                else
+                {
+                    AddText(ops, m, "THE HOURLY FORECAST WILL APPEAR WITH THE NEXT REFRESH", fLabel, Tertiary, ox, (curveTop + curveBottom) / 2f, track);
+                }
+                y = popBase + fLabel.Font.Size * 0.35f;
+
+                // ---- the next three days (three rows are always reserved)
+                y += st(4.5) + fLabel.CapHeight;
+                AddText(ops, m, "NEXT 3 DAYS", fLabel, Tertiary, ox, y, track);
+                y += st(5) + fData.CapHeight;
+                float rowPitch = line2 + st(4) * 0.95f + fData.CapHeight;
+                for (int i = 0; i < 3; i++)
+                {
+                    if (parsed && i < wx.Count)
+                    {
+                        string[] r = wx[i];
                         bool night = r[0].IndexOf("night", StringComparison.OrdinalIgnoreCase) >= 0;
                         ops.Add(new Op { Kind = 3, Text = Symbol(r[3], night), X = ox, Y = (float)Math.Round(y - fData.CapHeight), W = icon, H = icon, Color = Secondary });
-                        AddText(ops, m, r[0].ToUpperInvariant(), fLabel, Tertiary, ox + tx, y, track);
+                        string day = r[0].ToUpperInvariant();
+                        Op dayOp = AddTextOp(ops, day, fLabel, Tertiary, ox + tx, y, track);
+                        if (Measure(m, day, fLabel.Font, track) > dayW) dayOp.W = dayW;   // an unexpected long name is cut, not allowed to push
                         float hx = ox + tx + dayW + gx;
-                        if (r[1].Length > 0) AddText(ops, m, r[1], fData, Primary, hx + hiW - Measure(m, r[1], fData.Font, 0), y, 0);
-                        float lx = hx + hiW + gx * 0.6f;
-                        if (r[2].Length > 0) AddText(ops, m, r[2], fData, Secondary, lx + loW - Measure(m, r[2], fData.Font, 0), y, 0);
+                        if (r[1].Length > 0) AddText(ops, m, r[1], fData, Primary, hx + tempW - Measure(m, r[1], fData.Font, 0), y, 0);
+                        float lx = hx + tempW + gx * 0.6f;
+                        if (r[2].Length > 0) AddText(ops, m, r[2], fData, Secondary, lx + tempW - Measure(m, r[2], fData.Font, 0), y, 0);
                         if (r[4].Length > 0)
                         {
                             float pw = Measure(m, r[4], fData.Font, 0);
                             float px = ox + w - pw;
                             AddText(ops, m, r[4], fData, Tertiary, px, y, 0);
                             float dw = drop * 0.62f;
-                            ops.Add(new Op { Kind = 6, X = px - gx * 0.25f - dw, Y = y - drop, W = dw, H = drop, Color = Tertiary });
+                            ops.Add(new Op { Kind = 6, X = px - gx * 0.25f - dw, Y = y - drop, W = dw, H = drop, Color = Rain });
                         }
                         Op d = AddTextOp(ops, SentenceCase(r[3]), fSmall, Tertiary, ox + tx, y + line2, 0);
                         d.W = w - tx;
-                        y += line2 + st(4) * 0.95f + fData.CapHeight;
                     }
-                    y -= st(4) * 0.95f + fData.CapHeight;
-                    y += fSmall.Font.Size * 0.35f;
-                }
-                else
-                {
-                    foreach (string r in raw)
+                    else if (!parsed && i < raw.Count)
                     {
-                        Op d = AddTextOp(ops, r, fSmall, Secondary, ox, y, 0);
+                        Op d = AddTextOp(ops, raw[i], fSmall, Secondary, ox, y, 0);
                         d.W = w;
-                        y += fSmall.Font.Size * 1.7f;
                     }
+                    y += rowPitch;
                 }
+                y -= st(4) * 0.95f + fData.CapHeight;
+                y += fSmall.Font.Size * 0.35f;
             }
             return measure ? needed : y;
         }
 
-        /// <summary>Rows: label, value, graphic (float[] history, or double percent, or null), chart max, note.</summary>
+        private static readonly string[] TileLabels = { "HUMIDITY", "WIND", "SUNRISE", "SUNSET" };
+        private static readonly string[] TileTemplates = { "100%", "15–25 mph WNW", "12:59 AM", "12:59 PM" };
+        private static readonly float[] TileShare = { 0.24f, 0.32f, 0.22f, 0.22f };
+
+        /// <summary>The next sunrise and the next sunset after "now", in local time (false if unknown or polar).</summary>
+        internal static bool NextSun(DateTime now, double lat, double lon, out DateTime rise, out DateTime set)
+        {
+            rise = set = DateTime.MinValue;
+            if (double.IsNaN(lat) || double.IsNaN(lon)) return false;
+            DateTime r, st;
+            if (!SunTimesUtc(now.Date, lat, lon, out r, out st)) return false;
+            rise = r.ToLocalTime();
+            set = st.ToLocalTime();
+            if (rise <= now && SunTimesUtc(now.Date.AddDays(1), lat, lon, out r, out st)) rise = r.ToLocalTime();
+            if (set <= now && SunTimesUtc(now.Date.AddDays(1), lat, lon, out r, out st)) set = st.ToLocalTime();
+            return true;
+        }
+
+        /// <summary>
+        /// Sunrise and sunset (UTC) for a calendar day at a place, from NOAA's solar equations (equation of
+        /// time and declination as Fourier series, the sun's centre 0.833 degrees below the horizon for
+        /// refraction and its radius). Accurate to about a minute; false where the sun does not rise or set.
+        /// </summary>
+        internal static bool SunTimesUtc(DateTime day, double lat, double lon, out DateTime riseUtc, out DateTime setUtc)
+        {
+            riseUtc = setUtc = DateTime.MinValue;
+            double g = 2 * Math.PI / (DateTime.IsLeapYear(day.Year) ? 366 : 365) * (day.DayOfYear - 1);
+            double eq = 229.18 * (0.000075 + 0.001868 * Math.Cos(g) - 0.032077 * Math.Sin(g)
+                                  - 0.014615 * Math.Cos(2 * g) - 0.040849 * Math.Sin(2 * g));
+            double decl = 0.006918 - 0.399912 * Math.Cos(g) + 0.070257 * Math.Sin(g) - 0.006758 * Math.Cos(2 * g)
+                          + 0.000907 * Math.Sin(2 * g) - 0.002697 * Math.Cos(3 * g) + 0.00148 * Math.Sin(3 * g);
+            double phi = lat * Math.PI / 180;
+            double cosHa = Math.Cos(90.833 * Math.PI / 180) / (Math.Cos(phi) * Math.Cos(decl)) - Math.Tan(phi) * Math.Tan(decl);
+            if (cosHa < -1 || cosHa > 1) return false;
+            double ha = Math.Acos(cosHa) * 180 / Math.PI;
+            DateTime midnight = new DateTime(day.Year, day.Month, day.Day, 0, 0, 0, DateTimeKind.Utc);
+            riseUtc = midnight.AddMinutes(720 - 4 * (lon + ha) - eq);
+            setUtc = midnight.AddMinutes(720 - 4 * (lon - ha) - eq);
+            return true;
+        }
+
+        /// <summary>The current hour and the ones after it, oldest first.</summary>
+        internal static HourPoint[] NextHours(HourPoint[] all, DateTime now, int count)
+        {
+            List<HourPoint> list = new List<HourPoint>();
+            if (all != null)
+            {
+                foreach (HourPoint h in all) if (h.Start.AddHours(1) > now) list.Add(h);
+                list.Sort((a, b) => a.Start.CompareTo(b.Start));
+            }
+            if (list.Count > count) list.RemoveRange(count, list.Count - count);
+            return list.ToArray();
+        }
+
+        private static string HourLabel(DateTime t)
+        {
+            DateTimeFormatInfo f = CultureInfo.CurrentCulture.DateTimeFormat;
+            bool twelve = f.ShortTimePattern.IndexOf('t') >= 0;
+            return (twelve ? t.ToString("h tt", CultureInfo.CurrentCulture) : t.ToString("HH:00", CultureInfo.CurrentCulture)).ToUpperInvariant();
+        }
+
+        private static void AddCentered(List<Op> ops, Graphics m, string text, Face f, Color c, float cx, float baseline, float tracking)
+        {
+            AddTextOp(ops, text, f, c, cx - Measure(m, text, f.Font, tracking) / 2f, baseline, tracking);
+        }
+
+        /// <summary>
+        /// Always the same five rows once readings exist: label, value, graphic (float[] history, double
+        /// percent, or null), chart max, note. A reading that is not available yet shows "--".
+        /// </summary>
         private static List<object[]> SystemRows(DisplayState s)
         {
             List<object[]> rows = new List<object[]>();
             SysSnapshot x = s.Sys;
-            if (x != null && x.Version > 0)
+            if (x != null)
             {
-                rows.Add(new object[] { "CPU", x.Cpu >= 0 ? Math.Round(x.Cpu).ToString(CultureInfo.InvariantCulture) + "%" : "--", x.CpuHistory, 100.0, "" });
-                if (x.MemPercent >= 0)
-                    rows.Add(new object[] { "MEMORY", Math.Round(x.MemPercent).ToString(CultureInfo.InvariantCulture) + "%", x.MemPercent, 0.0,
-                                            x.MemUsedGb.ToString("0.0", CultureInfo.InvariantCulture) + " / " + x.MemTotalGb.ToString("0", CultureInfo.InvariantCulture) + " GB" });
+                bool any = x.Version > 0;
+                rows.Add(new object[] { "CPU", any && x.Cpu >= 0 ? Math.Round(x.Cpu).ToString(CultureInfo.InvariantCulture) + "%" : "--", x.CpuHistory, 100.0, "" });
+                rows.Add(new object[] { "MEMORY", any && x.MemPercent >= 0 ? Math.Round(x.MemPercent).ToString(CultureInfo.InvariantCulture) + "%" : "--",
+                                        any ? x.MemPercent : -1.0, 0.0,
+                                        any && x.MemPercent >= 0 ? x.MemUsedGb.ToString("0.0", CultureInfo.InvariantCulture) + " / " + x.MemTotalGb.ToString("0", CultureInfo.InvariantCulture) + " GB" : "" });
                 double peak = 0;
                 foreach (float v in x.NetHistory) if (v > peak) peak = v;
-                rows.Add(new object[] { "NETWORK", x.NetDown >= 0 ? "↓ " + Rate(x.NetDown) : "--", x.NetHistory, Math.Max(128 * 1024.0, peak * 1.15),
-                                        x.NetUp >= 0 ? "↑ " + Rate(x.NetUp) : "" });
-                if (x.DiskUsedPercent >= 0)
-                    rows.Add(new object[] { "DISK", Math.Round(x.DiskUsedPercent).ToString(CultureInfo.InvariantCulture) + "%", x.DiskUsedPercent, 0.0,
-                                            x.DiskFreeGb.ToString("0", CultureInfo.InvariantCulture) + " GB free" });
-                if (x.UptimeSeconds >= 0) rows.Add(new object[] { "UPTIME", Uptime(x.UptimeSeconds), null, 0.0, "" });
+                rows.Add(new object[] { "NETWORK", any && x.NetDown >= 0 ? "↓ " + Rate(x.NetDown) : "--", x.NetHistory, Math.Max(128 * 1024.0, peak * 1.15),
+                                        any && x.NetUp >= 0 ? "↑ " + Rate(x.NetUp) : "" });
+                rows.Add(new object[] { "DISK", any && x.DiskUsedPercent >= 0 ? Math.Round(x.DiskUsedPercent).ToString(CultureInfo.InvariantCulture) + "%" : "--",
+                                        any ? x.DiskUsedPercent : -1.0, 0.0,
+                                        any && x.DiskUsedPercent >= 0 ? x.DiskFreeGb.ToString("0", CultureInfo.InvariantCulture) + " GB free" : "" });
+                rows.Add(new object[] { "UPTIME", any && x.UptimeSeconds >= 0 ? Uptime(x.UptimeSeconds) : "--", null, 0.0, "" });
                 return rows;
             }
-            // No numeric readings (yet): the plain strings, without graphics.
+            // No numeric readings at all (only in previews of old states): the plain strings, without graphics.
             string[,] plain = { { "CPU", s.Cpu }, { "MEMORY", s.Ram }, { "NETWORK", s.Net }, { "DISK", s.Disk }, { "UPTIME", s.Uptime } };
             for (int i = 0; i < plain.GetLength(0); i++)
                 if (!string.IsNullOrEmpty(plain[i, 1])) rows.Add(new object[] { plain[i, 0], plain[i, 1], null, 0.0, "" });
@@ -807,6 +969,18 @@ namespace ClaudeCurtain
             return op;
         }
 
+        private static string WidestDigit(Graphics m, Font font, string digits)
+        {
+            string best = digits.Substring(0, 1);
+            float bestW = -1;
+            foreach (char d in digits)
+            {
+                float w = Measure(m, d.ToString(), font, 0);
+                if (w > bestW) { bestW = w; best = d.ToString(); }
+            }
+            return best;
+        }
+
         private static float InkLeft(string text, Face f)
         {
             if (string.IsNullOrEmpty(text)) return 0;
@@ -860,6 +1034,14 @@ namespace ClaudeCurtain
                     break;
                 case 6:
                     DrawDroplet(g, new RectangleF(ox + op.X, oy + op.Y, op.W, op.H), op.Color);
+                    break;
+                case 7:
+                    using (GraphicsPath p = RoundedTop(ox + op.X, oy + op.Y, op.W, op.H))
+                    using (SolidBrush b = new SolidBrush(op.Color))
+                        g.FillPath(b, p);
+                    break;
+                case 8:
+                    DrawTemperatureCurve(g, op, ox, oy, unit);
                     break;
             }
         }
@@ -951,6 +1133,45 @@ namespace ClaudeCurtain
             using (GraphicsPath fill = RoundedRight(x, y, fw, h))
             using (SolidBrush fb = new SolidBrush(op.Color))
                 g.FillPath(fb, fill);
+        }
+
+        /// <summary>A rain-chance bar: anchored on its baseline, a rounded data end on top.</summary>
+        private static GraphicsPath RoundedTop(float x, float y, float w, float h)
+        {
+            GraphicsPath p = new GraphicsPath();
+            float r = Math.Min(w / 2f, h);
+            if (h <= r) { p.AddRectangle(new RectangleF(x, y, w, h)); return p; }
+            p.AddArc(x, y, w, 2 * r, 180, 180);
+            p.AddLine(x + w, y + r, x + w, y + h);
+            p.AddLine(x + w, y + h, x, y + h);
+            p.CloseFigure();
+            return p;
+        }
+
+        /// <summary>The hourly temperatures as one smooth line, a dot on each hour, the current hour brighter.</summary>
+        private static void DrawTemperatureCurve(Graphics g, Op op, float ox, float oy, float unit)
+        {
+            float[] d = op.Data;
+            if (d == null || d.Length < 2) return;
+            PointF[] pts = new PointF[d.Length / 2];
+            for (int i = 0; i < pts.Length; i++) pts[i] = new PointF(ox + d[2 * i], oy + d[2 * i + 1]);
+            float lw = Math.Max(1.5f, unit / 80f);
+            if (pts.Length > 1)
+            {
+                using (Pen p = new Pen(op.Color, lw))
+                {
+                    p.LineJoin = LineJoin.Round;
+                    g.DrawCurve(p, pts, 0.45f);
+                }
+            }
+            float dot = Math.Max(5f, unit / 20f);
+            for (int i = 0; i < pts.Length; i++)
+            {
+                using (SolidBrush halo = new SolidBrush(Color.Black))
+                    g.FillEllipse(halo, pts[i].X - dot / 2f - lw, pts[i].Y - dot / 2f - lw, dot + 2 * lw, dot + 2 * lw);
+                using (SolidBrush b = new SolidBrush(i == 0 ? Hero : op.Color))
+                    g.FillEllipse(b, pts[i].X - dot / 2f, pts[i].Y - dot / 2f, dot, dot);
+            }
         }
 
         private static GraphicsPath RoundedRight(float x, float y, float w, float h)

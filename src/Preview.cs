@@ -130,6 +130,11 @@ namespace ClaudeCurtain
             s.Stats = "CPU " + s.Cpu + "     RAM " + s.Ram + "     Net " + s.Net;
             s.SysInfo = "Up " + s.Uptime + "     " + s.Disk;
             s.Sys = SampleSys();
+            s.Now = now;
+            s.Hourly = SampleHourly(now);
+            s.HourlyKey = "sample";
+            s.Lat = 45.0;     // a neutral sample place in the Pacific time zone, not anyone's home
+            s.Lon = -122.0;
 
             string wx = Path.Combine(o.LocalDir ?? "", "weather.txt");
             string[] lines = null;
@@ -156,6 +161,27 @@ namespace ClaudeCurtain
                 case "night": s.NightDim = CurtainPainter.NightLevel; break;
             }
             return s;
+        }
+
+        /// <summary>Twelve hours from the top of the current hour: rain moving in over the afternoon.</summary>
+        internal static HourPoint[] SampleHourly(DateTime now)
+        {
+            int[] temp = { 58, 60, 62, 63, 63, 62, 60, 58, 57, 56, 55, 55 };
+            int[] pop = { 5, 9, 18, 34, 58, 76, 84, 70, 45, 25, 12, 8 };
+            string[] text =
+            {
+                "Mostly Cloudy", "Mostly Cloudy", "Slight Chance Light Rain", "Chance Light Rain", "Light Rain Likely", "Light Rain",
+                "Light Rain", "Light Rain Likely", "Chance Light Rain", "Slight Chance Light Rain", "Mostly Cloudy", "Partly Cloudy",
+            };
+            DateTime top = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0);
+            HourPoint[] h = new HourPoint[temp.Length];
+            for (int i = 0; i < h.Length; i++)
+            {
+                h[i] = new HourPoint { Start = top.AddHours(i), Temp = temp[i], Pop = pop[i], Text = text[i],
+                                       Humidity = 62 + 2 * i, Wind = (6 + i / 2) + " mph SSW" };
+                h[i].IsDay = h[i].Start.Hour >= 7 && h[i].Start.Hour < 17;
+            }
+            return h;
         }
 
         /// <summary>Ten plausible minutes: a quiet machine with a few bursts of work and one download.</summary>
