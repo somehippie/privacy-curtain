@@ -121,7 +121,7 @@ try {
     Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @(
         '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$wx`"", '-LocalDir', "`"$LocalDir`"",
         '-Watch', '-CurtainPid', "$($state.pid)") | Out-Null
-    Write-Host 'On-screen info   : CPU / RAM / network, uptime, disk, and the local forecast (next 6 hours and 3 days, refreshed every 30 min).'
+    Write-Host 'On-screen info   : CPU / RAM / network, uptime, disk, the local forecast (next 6 hours and 3 days, refreshed every 30 min) and a radar or cloud map of the last hour (every 5 min).'
 } catch {
     Write-Host 'On-screen info   : CPU / RAM / network, uptime, disk.'
 }
