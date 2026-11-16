@@ -688,6 +688,100 @@ namespace ClaudeCurtain
                 Check("motion: the map's replay cross-fades at frame rate and the screen rests between replays", rest && fading && restsAgain);
                 Check("motion: the map steps back while a PIN is typed, then the screen rests", veilMoves && veilDone);
             }
+
+            // Station reports, the elevation tiles and the tide in map.txt.
+            {
+                WeatherMap.Index sx = WeatherMap.Index.Parse(new[]
+                {
+                    "box 44.4 -123.5 45.6 -120.5", "base b.png", "dem 9 80 197 84 199",
+                    "station KABC 45.1 -122.2 57 300 14 22 2026-11-15T18:35:00Z",
+                    "station KDEF 44.9 -121.8 - - - - 2026-11-15T18:35:00Z",
+                    "station BAD! 44.9 -121.8 50 0 0 - 2026-11-15T18:35:00Z",
+                    "station KGHI 44.9 -121.8 50 0 0",
+                    "tidestation 9999999 45.0 -123.0",
+                    "tide 2026-11-15T12:00:00Z L 0.5", "tide 2026-11-15T18:00:00Z H 6.5", "tide 2026-11-16T00:00:00Z L 1.5",
+                });
+                Check("map: station reports, the elevation tiles and the tide are read from map.txt (malformed stations refused)",
+                      sx.Stations.Count == 2 && sx.Stations[0].TempF == 57 && sx.Stations[0].WindFrom == 300 && sx.Stations[0].WindMph == 14 &&
+                      sx.Stations[0].GustMph == 22 && sx.Stations[1].TempF == int.MinValue && sx.Stations[1].WindMph == -1 &&
+                      sx.DemZoom == 9 && sx.DemX1 == 84 && sx.Tide != null && sx.Tide.Times.Length == 3 && sx.Tide.High[1]);
+                MapTide tide = sx.Tide;
+                DateTime t0 = new DateTime(2026, 11, 15, 12, 0, 0, DateTimeKind.Utc);
+                Check("tide: the curve passes through each high and low, halfway between at mid-time, rising before a high",
+                      tide != null && Math.Abs(tide.HeightAt(t0) - 0.5) < 1e-6 && Math.Abs(tide.HeightAt(t0.AddHours(6)) - 6.5) < 1e-6 &&
+                      Math.Abs(tide.HeightAt(t0.AddHours(3)) - 3.5) < 1e-6 && tide.HeightAt(t0.AddHours(2)) < tide.HeightAt(t0.AddHours(4)) &&
+                      tide.NextEvent(t0.AddHours(1)) == 1 && double.IsNaN(tide.HeightAt(t0.AddHours(-1))) && tide.NextEvent(t0.AddHours(13)) == -1);
+                Check("map: wind reads as the forecast writes it, gusts as a range, and is labelled from 10 mph",
+                      WeatherMap.WindText(sx.Stations[0]) == "14–22 mph" && WeatherMap.WindText(new MapStation { WindMph = 12, GustMph = 15 }) == "12 mph" &&
+                      WeatherMap.Windy(sx.Stations[0]) && !WeatherMap.Windy(new MapStation { WindMph = 9 }));
+            }
+
+            // Elevation: terrarium pixels to metres, tiles found and stitched in the right places.
+            {
+                float[] e = WeatherMap.Terrarium(new[] { unchecked((int)0xFF800000), unchecked((int)0xFF812C00), unchecked((int)0xFF7FFF80) });
+                double gx, gy;
+                WeatherMap.Mercator(51.5074, -0.1278, 9, out gx, out gy);
+                float[] a = new float[65536], b = new float[65536];
+                for (int i = 0; i < 65536; i++) { a[i] = 100; b[i] = 200; }
+                int sw, sh;
+                float[] grid = WeatherMap.StitchDem(new[] { a, b }, 9, 255, 170, 2, 1, new GeoBox(51.3, -0.6, 51.5, 0.6), out sw, out sh);
+                Check("relief: elevation pixels decode to metres (sea level, 300 m, half a metre below) and London falls in tile 255, 170 at zoom 9",
+                      Math.Abs(e[0]) < 1e-3 && Math.Abs(e[1] - 300) < 1e-3 && Math.Abs(e[2] + 0.5) < 1e-3 && (int)(gx / 256) == 255 && (int)(gy / 256) == 170);
+                Check("relief: the tiles are stitched into the right places",
+                      sw == 480 && sh == 80 && Math.Abs(grid[(sh / 2) * sw + 2] - 100) < 0.01 && Math.Abs(grid[(sh / 2) * sw + sw - 3] - 200) < 0.01);
+            }
+
+            // Which stations get a label.
+            {
+                GeoBox crop = new GeoBox(44.6, -123.3, 45.4, -121.5);   // 500 pixels a degree on a 900 x 400 map
+                Func<double, double, int, MapStation> st = (la, lo, t) => new MapStation { Id = "K" + t, Lat = la, Lon = lo, TempF = t, Utc = DateTime.UtcNow };
+                MapStation[] all =
+                {
+                    st(45.0, -122.4, 60), st(45.01, -122.38, 61),                  // nearest home, and one right beside it
+                    st(45.3, -123.2, 55), st(44.8, -121.6, 70), st(45.3, -121.6, 66), st(44.8, -123.2, 54),   // the four corners
+                    st(44.62, -122.4, 58), st(46.0, -122.0, 50),                   // in the legend's band; off the map
+                };
+                Func<MapStation, RectangleF> box = s => new RectangleF(-20, -8, 40, 16);
+                List<PlacedStation> picked = WeatherMap.PickStations(all, crop, 900, 400, 45.0, -122.45, box, 120, 10, 60, new List<RectangleF>(), 7);
+                bool spaced = true;
+                for (int i = 0; i < picked.Count; i++)
+                    for (int j = i + 1; j < picked.Count; j++)
+                        if (Math.Sqrt(Math.Pow(picked[i].X - picked[j].X, 2) + Math.Pow(picked[i].Y - picked[j].Y, 2)) < 120) spaced = false;
+                bool kept = picked.TrueForAll(p => p.Station.TempF != 58 && p.Station.TempF != 50 && p.Station.TempF != 61);
+                List<PlacedStation> two = WeatherMap.PickStations(all, crop, 900, 400, 45.0, -122.45, box, 120, 10, 60, new List<RectangleF>(), 2);
+                List<PlacedStation> around = WeatherMap.PickStations(all, crop, 900, 400, 45.0, -122.45, box, 120, 10, 60,
+                                                                     new List<RectangleF> { new RectangleF(820, 30, 60, 40) }, 7);
+                Check("map: temperatures start nearest home, spread out, keep apart, and stay off the edges, the legend and other labels",
+                      picked.Count == 5 && picked[0].Station.TempF == 60 && spaced && kept && two.Count == 2 &&
+                      around.Count == 4 && around.TrueForAll(p => p.Station.TempF != 66));
+            }
+
+            // The sample: labels placed without overlapping, and the relief drawn into the ground.
+            {
+                Options po = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") };
+                DisplayState s = CurtainPreview.Sample(po, "idle");
+                CurtainPainter.Layout l = CurtainPainter.Compose(s, 2560, 1440);
+                bool apart = true;
+                RectangleF tideBox = l.MapTideBox;
+                for (int i = 0; i < l.MapStations.Count; i++)
+                {
+                    if (l.MapStations[i].Box.IntersectsWith(tideBox)) apart = false;
+                    for (int j = i + 1; j < l.MapStations.Count; j++) if (l.MapStations[i].Box.IntersectsWith(l.MapStations[j].Box)) apart = false;
+                }
+                Check("map: the sample shows station temperatures (wind where it blows) and the tide, with no label over another",
+                      l.MapStations.Count >= 4 && l.MapStations.Exists(p => WeatherMap.Windy(p.Station)) && l.MapTideCurve != null &&
+                      l.MapTideText.StartsWith("High ", StringComparison.Ordinal) && apart);
+                l.Dispose();
+
+                WeatherMap relief = s.Map;
+                WeatherMap flat = new WeatherMap { Box = relief.Box, BaseW = relief.BaseW, BaseH = relief.BaseH, Water = relief.Water, BaseId = "selftest-flat" };
+                GeoBox c = WeatherMap.Crop(relief.Box, s.Lat, s.Lon, 600, 300);
+                int[] withRelief = MapArt.GetPixels(MapArt.Base(relief, c, 600, 300)), without = MapArt.GetPixels(MapArt.Base(flat, c, 600, 300));
+                int differ = 0;
+                for (int i = 0; i < withRelief.Length; i++) if (withRelief[i] != without[i]) differ++;
+                lines.Add("INFO  relief changes " + (100 * differ / withRelief.Length) + "% of the sample map's pixels");
+                Check("relief: hills and contours are drawn into the map's ground", differ > withRelief.Length / 10);
+            }
         }
 
         private static void SaveSolid(string path, int w, int h, Func<int, int, Color> colour)

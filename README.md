@@ -4,7 +4,7 @@ A black screen that covers every monitor and blocks the physical keyboard and mo
 (injected) clicks, typing and screenshots keep working underneath. It's for hiding an automated session on
 a machine you share a room with, without taking the machine away from yourself.
 
-![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone, a weather map below it showing a band of rain approaching a coast from the west, the message "PC in use by Claude", and a data column with ten-minute CPU and network sparklines, memory and disk bars, then the forecast: humidity, wind, sunrise and sunset, the next six hours as a temperature curve over rain-chance bars, and three days](docs/curtain.png)
+![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone, a weather map below it showing a band of rain approaching a coast from the west over shaded hills with contour lines, with temperatures, a windy coast and the tide labelled, the message "PC in use by Claude", and a data column with ten-minute CPU and network sparklines, memory and disk bars, then the forecast: humidity, wind, sunrise and sunset, the next six hours as a temperature curve over rain-chance bars, and three days](docs/curtain.png)
 
 Awareness, not lockout: it counts and logs every blocked key press, click and escape attempt, can ping your
 phone while someone is at the keyboard, and shows a "While you were away" summary when you unlock. The
@@ -139,7 +139,7 @@ summary as text.
 screen; `curtain-on.ps1` and `curtain-status.ps1` print it.
 
 **How long logs are kept.** By size, not by date, so they can never grow past a fixed amount. All of
-them together stay under about 1.8 MB, and the weather map's pictures under another 0.3 MB:
+them together stay under about 1.8 MB, and the weather map's files under another 2 MB:
 
 | File (in `local\`) | Cap | Roughly how much history |
 |---|---|---|
@@ -148,6 +148,7 @@ them together stay under about 1.8 MB, and the weather map's pictures under anot
 | `alerts.log` | 256 KB, trimmed to the newest 160 KB | thousands of alerts |
 | `last-summary.txt`, `last-summary-timeline.txt`, `last-exit.json`, `weather.txt`, `weather-hourly.txt` | one small file each, overwritten (the timeline holds at most 5,000 moments, about 60 KB) | the last run only |
 | `map.txt`, `map-base-*.png`, `radar-*.png`, `sat-*.jpg` (the weather map) | the last hour of pictures (about 8 radar, 7 satellite) and one land and water map; older pictures are deleted at each refresh | the last hour |
+| `dem-*.png`, `tide-station.txt` (the map's relief and tide) | the elevation tiles over the map's area (about 1.6 MB) and one line naming the tide station, fetched once per place; tiles for another place are deleted | as long as the place stays the same |
 | `test\report-*.txt` | the 10 newest are kept | the last 10 test runs |
 
 Your own unlock is not counted as someone at the keyboard. The key presses of the PIN entry that unlocked
@@ -217,8 +218,11 @@ about what it is doing. Everything on it comes from one proportional system buil
   land, the shoreline a fine line drawn over the weather so the coast stays readable under fog, rain in
   the data hue from quiet to bright as it gets heavier (amber when heavy, coral when severe, with a
   five-step legend), clouds and fog in warm white, never brighter than the body text, so the clock stays
-  the brightest thing on screen. The PIN row shares the map's lowest band: while a PIN is typed the map
-  fades to black, and it comes back when the row clears.
+  the brightest thing on screen. Under the weather the land's relief stays ground rather than picture: lit
+  slopes, a faint warm tint on high ground and hairline contours every 200 m, like a topographic print.
+  Over it, a few labels with a dark halo: station temperatures spread across the map, wind only where it
+  is notable, and the tide as a tiny curve of the next day. The PIN row shares the map's lowest band:
+  while a PIN is typed the map fades to black, and it comes back when the row clears.
 - **Colour.** Warm neutrals in four text tones and one accent, the short terracotta rule. The self-tests
   compute each tone's contrast on black: every text tone meets WCAG AA (the faintest labels are 4.9 : 1)
   and body text and values meet AAA (7.7 : 1). Overnight (10:30 PM to 6:30 AM, with hour-long ramps) the
@@ -297,8 +301,32 @@ And in the left column:
   low stratus are close to the ground's temperature, so they barely show at night). Land and water come
   from NASA GIBS's map made from OpenStreetMap, fetched once (map data © OpenStreetMap contributors).
 
-  `curtain-weather.ps1` fetches the pictures into `local\` alongside the forecast (`map.txt` lists them)
-  and, in the background, refreshes them every 5 minutes (`-MapMinutes`), keeping only the last hour.
+  Under the weather, the **relief**: the land's shape from AWS Terrain Tiles (in the United States, USGS
+  3DEP elevation; about 240 m a cell, 15 tiles fetched once per place). Hills are lit from the north-west,
+  heights exaggerated 2.4 times so gentle ranges still read at this scale, and softened slightly so the
+  coarse tiles don't look grainy. Black can't be darkened, so lit slopes brighten and high ground takes a
+  faint warm tint while valleys stay black. A hairline contour every 200 m is drawn per pixel from height
+  and slope (no tracing), so the lines stay smooth at any screen size.
+
+  Over it, small labels with a dark halo so they read over cloud and rain:
+
+  - **Temperatures and wind** from the latest reports of every airport weather station on the map (METARs
+    from NOAA's Aviation Weather Center, one request for the area, at most every 15 minutes; reports more
+    than 2 hours old are dropped). Up to seven are labelled: first the station nearest home, then each
+    time the one farthest from those already chosen, so the labels spread across coast, shore and inland
+    valleys, which is where local microclimates differ, and never crowd or overlap. Wind shows only where
+    it blows 10 mph or more, as an arrow pointing the way it blows and "14 mph", or "14–20 mph" when it
+    gusts well above that, so a windy coast stands out and calm places stay a plain number.
+  - **The tide** at the nearest NOAA tide station that keeps its own predictions (a "reference" station)
+    within 60 km, found once per place from NOAA's station list. Its predicted highs and lows (NOAA CO-OPS,
+    refreshed every 6 hours) become one label at the station: a small curve of the next 24 hours starting
+    from a dot at the height now, and the next high or low, "High 4:43 PM". Inland there is no station and
+    no label.
+
+  `curtain-weather.ps1` fetches all of this into `local\` alongside the forecast (`map.txt` lists the
+  pictures, the station reports and the tide) and, in the background, refreshes it every 5 minutes
+  (`-MapMinutes`), keeping only the last hour of pictures. The map's credit reads "NOAA · USGS ·
+  © OpenStreetMap".
   Requests carry a box of 1.2 × 3 degrees around the forecast grid, rounded to a tenth of a degree (about
   10 km), so the servers learn the area, never the address; no key, no account. Pictures more than three
   hours old are never shown, and with no map files at all the curtain looks exactly as it did before the
@@ -340,14 +368,16 @@ Please read these before relying on the curtain.
 ```
 
 They use a throwaway PIN in `local\test` and never touch the real one, and they never call your notify
-hook. The self-tests (~111 checks, including PIN hashing/entry rules, which key presses belong to your own
+hook. The self-tests (~119 checks, including PIN hashing/entry rules, which key presses belong to your own
 unlock, the time-zone label, the stats sampler, weather-file reading, and the design: every state rendered
 at 720p, 1080p, 16:10, 1440p, ultrawide and portrait, fitting the screen, the columns exactly φ : 1,
 staying on screen through 8 hours of drift, a fixed frame whatever the readings, the hourly forecast file,
 sunrise and sunset against published times, every text tone's WCAG contrast, and the animations starting
 and settling; and the weather map: its place in the layout, every radar colour read back as its dBZ, the
 map file and its pictures, stale and missing pictures, radar or clouds, which part of the area shows, the
-replay's timing, the sun's height, and the replay and the PIN veil letting the screen rest) and the full
+replay's timing, the sun's height, the replay and the PIN veil letting the screen rest, station reports,
+elevation tiles decoded and stitched in the right places, the tide curve through each high and low, which
+stations get a label, labels never overlapping, and the relief being drawn) and the full
 lifecycle suite (100+ checks: a screenshot seeing the
 desktop through the curtain, injected clicks and typing passing through, simulated shutdown, every hang
 being recovered, the keep-awake request appearing with the curtain and vanishing with it, the alerts, the
@@ -366,15 +396,16 @@ runs.
   (ignored).
 - `scripts/` — the PowerShell entry points (on, off, launch, set-pin, status, log, weather, build, test).
 - `tests/` — the test helper used by `test-curtain.ps1`.
-- `local/` (ignored) — the PIN hash, logs, run state, the cached forecast and the weather map's pictures.
+- `local/` (ignored) — the PIN hash, logs, run state, the cached forecast and the weather map's pictures,
+  elevation tiles and tide station.
 
 ## Colophon
 
 Set in Bahnschrift (Microsoft, after DIN 1451). Grid, type scale, margins and drift all derive from the
 golden ratio. Drawn with GDI+ from the C# compiler inside Windows, with no external assets: the weather
-symbols, sparklines and bars are all code, and the map is drawn pixel by pixel from NOAA's radar and
-satellite numbers over a land and water map from NASA GIBS (© OpenStreetMap contributors). Designed,
-built and tested with
+symbols, sparklines and bars are all code, and the map is drawn pixel by pixel from NOAA's radar,
+satellite, station and tide numbers, over relief from USGS elevation (AWS Terrain Tiles) and a land and
+water map from NASA GIBS (© OpenStreetMap contributors). Designed, built and tested with
 [Claude Code](https://claude.com/claude-code).
 
 ## License

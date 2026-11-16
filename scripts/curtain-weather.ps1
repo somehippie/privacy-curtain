@@ -281,18 +281,127 @@ function Save-MapImage([string]$Url, [string]$Path) {
     }
 }
 
-# What the current map.txt lists for one kind of line ("radar" or "sat"), to keep it when a refresh fails.
+# What the current map.txt lists for one kind of line ("radar", "sat", "dem", "station", "tidestation",
+# "tide"), to keep it when a refresh fails. Picture lines only while their file is still here.
 function Get-MapEntries([string]$Kind) {
     $list = New-Object System.Collections.Generic.List[string]
     if (Test-Path $mapFile) {
         foreach ($line in (Get-Content -Path $mapFile -Encoding UTF8)) {
-            if ($line.StartsWith("$Kind ")) {
-                $name = ($line -split '\s+')[-1]
-                if (Test-Path (Join-Path $LocalDir $name)) { $list.Add($line) }
+            if (-not $line.StartsWith("$Kind ")) { continue }
+            if ($Kind -eq 'radar' -or $Kind -eq 'sat') {
+                if (-not (Test-Path (Join-Path $LocalDir (($line -split '\s+')[-1])))) { continue }
             }
+            $list.Add($line)
         }
     }
     return $list.ToArray()
+}
+
+# Weather stations: the latest report (METAR) from every airport weather station in the box, from NOAA's
+# Aviation Weather Center, at most every 15 minutes. Temperature (F) and wind (mph) for the map's labels.
+$script:stationLines = $null
+$script:stationAt = [DateTime]::MinValue
+
+function Get-StationLines([double[]]$Box) {
+    if ($null -ne $script:stationLines -and ((Get-Date) - $script:stationAt).TotalMinutes -lt 15) { return $script:stationLines }
+    $bbox = ($Box | ForEach-Object { $_.ToString('0.###', $inv) }) -join ','   # south,west,north,east
+    $reports = Invoke-RestMethod -Uri "https://aviationweather.gov/api/data/metar?bbox=$bbox&format=json" -Headers @{ 'User-Agent' = $ua } -TimeoutSec $TimeoutSec
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($m in @($reports)) {
+        $id = [string]$m.icaoId
+        if ($id -notmatch '^[A-Z0-9]{3,6}$' -or $null -eq $m.lat -or $null -eq $m.lon -or -not $m.reportTime) { continue }
+        $temp = '-'; if ($null -ne $m.temp -and "$($m.temp)" -ne '') { $temp = ([Math]::Round([double]$m.temp * 9 / 5 + 32)).ToString($inv) }
+        $from = '-'; if ($null -ne $m.wdir -and -not ($m.wdir -is [string])) { $from = ([int]$m.wdir).ToString($inv) }   # "VRB": variable
+        $speed = '-'; if ($null -ne $m.wspd) { $speed = ([Math]::Round([double]$m.wspd * 1.15078)).ToString($inv) }   # knots to mph
+        $gust = '-'; if ($null -ne $m.wgst) { $gust = ([Math]::Round([double]$m.wgst * 1.15078)).ToString($inv) }
+        if ($m.reportTime -is [datetime]) { $utc = $m.reportTime.ToUniversalTime() } else { $utc = [DateTimeOffset]::Parse([string]$m.reportTime, $inv).UtcDateTime }
+        $lines.Add(('station {0} {1} {2} {3} {4} {5} {6} {7}' -f $id, ([double]$m.lat).ToString('0.####', $inv), ([double]$m.lon).ToString('0.####', $inv),
+                    $temp, $from, $speed, $gust, $utc.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", $inv)))
+    }
+    $script:stationLines = $lines.ToArray()
+    $script:stationAt = Get-Date
+    return $script:stationLines
+}
+
+# Elevation, once per place: AWS Terrain Tiles ("terrarium" PNGs; USGS 3DEP elevation in the US), zoom 9,
+# the 15 or so tiles that cover the box, about 1.6 MB. Returns the map.txt line that lists them.
+function Get-TileX([double]$Lon, [int]$Z) { return [int][Math]::Floor(($Lon + 180) / 360 * [Math]::Pow(2, $Z)) }
+function Get-TileY([double]$Lat, [int]$Z) {
+    $r = $Lat * [Math]::PI / 180
+    return [int][Math]::Floor((1 - [Math]::Log([Math]::Tan($r) + 1 / [Math]::Cos($r)) / [Math]::PI) / 2 * [Math]::Pow(2, $Z))
+}
+
+function Update-Dem([double[]]$Box) {
+    $z = 9
+    $x0 = Get-TileX $Box[1] $z; $x1 = Get-TileX $Box[3] $z
+    $y0 = Get-TileY $Box[2] $z; $y1 = Get-TileY $Box[0] $z
+    $names = @{}
+    for ($x = $x0; $x -le $x1; $x++) {
+        for ($y = $y0; $y -le $y1; $y++) {
+            $name = 'dem-{0}-{1}-{2}.png' -f $z, $x, $y
+            $names[$name] = $true
+            $path = Join-Path $LocalDir $name
+            if (-not (Test-Path $path)) { Save-MapImage "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/$z/$x/$y.png" $path }
+        }
+    }
+    Get-ChildItem -Path $LocalDir -Filter 'dem-*.png' | Where-Object { -not $names.ContainsKey($_.Name) } | Remove-Item -Force -ErrorAction SilentlyContinue
+    return ('dem {0} {1} {2} {3} {4}' -f $z, $x0, $y0, $x1, $y1)
+}
+
+# Tides: the nearest NOAA tide station that keeps its own predictions (a "reference" station) within 60 km,
+# looked up once per place and remembered in local\tide-station.txt; its highs and lows from yesterday to
+# three days ahead, refreshed every 6 hours. Inland, there is none and the map simply shows no tide.
+$tideFile = Join-Path $LocalDir 'tide-station.txt'
+$script:tideLines = $null
+$script:tideAt = [DateTime]::MinValue
+
+function Get-TideStation([double]$Lat, [double]$Lon, [string]$BoxText) {
+    if (Test-Path $tideFile) {
+        $saved = [string](Get-Content -Path $tideFile -Encoding UTF8 | Select-Object -First 1)
+        $prefix = "box $BoxText "
+        if ($saved.StartsWith($prefix)) {
+            $rest = $saved.Substring($prefix.Length) -split '\s+'
+            if ($rest[0] -eq 'none') { return $null }
+            if ($rest.Count -eq 4 -and $rest[0] -eq 'station') { return @($rest[1], $rest[2], $rest[3]) }
+        }
+    }
+    $json = (Invoke-WebRequest -UseBasicParsing -Uri 'https://api.tidesandcurrents.noaa.gov/mdapi/prod/webapi/stations.json?type=tidepredictions' -Headers @{ 'User-Agent' = $ua } -TimeoutSec 90).Content
+    Add-Type -AssemblyName System.Web.Extensions
+    $parser = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+    $parser.MaxJsonLength = 64MB   # the list is about 2 MB, past ConvertFrom-Json's limit
+    $k = 111.2 * [Math]::Cos($Lat * [Math]::PI / 180)
+    $best = $null; $bestKm = 60.0
+    foreach ($s in $parser.DeserializeObject($json)['stations']) {
+        if ([string]$s['type'] -ne 'R') { continue }
+        $dx = ([double]$s['lng'] - $Lon) * $k; $dy = ([double]$s['lat'] - $Lat) * 111.2
+        $km = [Math]::Sqrt($dx * $dx + $dy * $dy)
+        if ($km -lt $bestKm) { $best = $s; $bestKm = $km }
+    }
+    if ($null -eq $best -or [string]$best['id'] -notmatch '^[A-Za-z0-9]{3,12}$') { Write-Atomic $tideFile @("box $BoxText none"); return $null }
+    $found = @([string]$best['id'], ([double]$best['lat']).ToString('0.####', $inv), ([double]$best['lng']).ToString('0.####', $inv))
+    Write-Atomic $tideFile @(('box {0} station {1} {2} {3}' -f $BoxText, $found[0], $found[1], $found[2]))
+    return $found
+}
+
+function Get-TideLines([double]$Lat, [double]$Lon, [string]$BoxText) {
+    if ($null -ne $script:tideLines -and ((Get-Date) - $script:tideAt).TotalHours -lt 6) { return $script:tideLines }
+    $station = Get-TideStation $Lat $Lon $BoxText
+    $lines = New-Object System.Collections.Generic.List[string]
+    if ($station) {
+        $begin = [DateTime]::UtcNow.AddDays(-1).ToString('yyyyMMdd', $inv)
+        $url = "https://api.tidesandcurrents.noaa.gov/api/prod/datagetter?begin_date=$begin&range=96&station=$($station[0])&product=predictions&datum=MLLW&time_zone=gmt&interval=hilo&units=english&application=PrivacyCurtain&format=json"
+        $r = Invoke-RestMethod -Uri $url -Headers @{ 'User-Agent' = $ua } -TimeoutSec $TimeoutSec
+        $lines.Add(('tidestation {0} {1} {2}' -f $station[0], $station[1], $station[2]))
+        foreach ($p in @($r.predictions)) {
+            if ($p.type -ne 'H' -and $p.type -ne 'L') { continue }
+            $t = [DateTime]::ParseExact([string]$p.t, 'yyyy-MM-dd HH:mm', $inv, [Globalization.DateTimeStyles]::AssumeUniversal -bor [Globalization.DateTimeStyles]::AdjustToUniversal)
+            $lines.Add(('tide {0} {1} {2}' -f $t.ToString("yyyy-MM-dd'T'HH:mm':00Z'", $inv), $p.type, ([double]$p.v).ToString('0.00', $inv)))
+        }
+        if ($lines.Count -lt 3) { throw 'no tide predictions returned' }
+    }
+    $script:tideLines = $lines.ToArray()
+    $script:tideAt = Get-Date
+    return $script:tideLines
 }
 
 # The pictures of the last hour for one layer, downloading the ones not here yet. Returns index lines.
@@ -335,6 +444,10 @@ function Update-Map {
         Get-ChildItem -Path $LocalDir -Filter 'map-base-*.png' | Where-Object { $_.Name -ne $baseName } | Remove-Item -Force -ErrorAction SilentlyContinue
     }
 
+    # Elevation for the relief, once per place.
+    try { $dem = @(Update-Dem $box) }
+    catch { Write-Host "Elevation skipped: $($_.Exception.Message)"; $dem = Get-MapEntries 'dem' }
+
     # Radar: one picture every 8 minutes over the last hour, at the mosaic's own 0.01-degree grid.
     try { $radar = Update-Frames 'radar' 'radar' 'weather_radar' 'conus_base_reflectivity_mosaic' 8 56 $box ([int][Math]::Round($lonSpan / 0.01)) ([int][Math]::Round($latSpan / 0.01)) 'image/png' 'png' }
     catch { Write-Host "Radar refresh skipped: $($_.Exception.Message)"; $radar = Get-MapEntries 'radar' }
@@ -345,12 +458,18 @@ function Update-Map {
     try { $sat = Update-Frames "sat-$kind" "sat $kind" 'satellite' $layer 10 60 $box ([int][Math]::Round($lonSpan / 0.004)) ([int][Math]::Round($latSpan / 0.004)) 'image/jpeg' 'jpg' }
     catch { Write-Host "Satellite refresh skipped: $($_.Exception.Message)"; $sat = Get-MapEntries 'sat' }
 
+    # Station temperatures and wind; the tide.
+    try { $stations = Get-StationLines $box }
+    catch { Write-Host "Station reports skipped: $($_.Exception.Message)"; $stations = Get-MapEntries 'station' }
+    try { $tides = Get-TideLines $center[0] $center[1] $boxText }
+    catch { Write-Host "Tides skipped: $($_.Exception.Message)"; $tides = @(Get-MapEntries 'tidestation') + @(Get-MapEntries 'tide') }
+
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add(('# weather map for the curtain, as of {0}' -f (Get-Date -Format 't')))
     $lines.Add("box $boxText")
     $lines.Add("base $baseName")
-    foreach ($l in @($radar) + @($sat)) { if ($l) { $lines.Add($l) } }
-    $lines.Add(('credit NOAA  {0}  {1} OpenStreetMap' -f [char]0x00B7, [char]0x00A9))
+    foreach ($l in @($dem) + @($radar) + @($sat) + @($stations) + @($tides)) { if ($l) { $lines.Add($l) } }
+    $lines.Add(('credit NOAA  {0}  USGS  {0}  {1} OpenStreetMap' -f [char]0x00B7, [char]0x00A9))
     Write-Atomic $mapFile $lines
 
     # Only now that map.txt no longer lists them: remove pictures that dropped out of the last hour.
@@ -358,7 +477,9 @@ function Update-Map {
     foreach ($l in $lines) { $keep[($l -split '\s+')[-1]] = $true }
     Get-ChildItem -Path $LocalDir -File | Where-Object { $_.Name -match $mapNamePattern -and -not $keep.ContainsKey($_.Name) } |
         Remove-Item -Force -ErrorAction SilentlyContinue
-    Write-Host ("Wrote {0} ({1} radar, {2} {3} satellite picture(s))." -f $mapFile, @($radar).Count, @($sat).Count, $kind)
+    $tideNote = if (@($tides).Count -gt 1) { 'tide station ' + ((@($tides)[0] -split '\s+')[1]) } else { 'no tide station near' }
+    Write-Host ("Wrote {0} ({1} radar, {2} {3} satellite picture(s), {4} station report(s), {5}, relief {6})." -f $mapFile, @($radar).Count, @($sat).Count, $kind,
+                @($stations).Count, $tideNote, $(if (@($dem).Count -gt 0) { 'yes' } else { 'no' }))
 }
 
 function Test-CurtainAlive {

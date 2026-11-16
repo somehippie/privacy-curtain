@@ -29,6 +29,59 @@ namespace ClaudeCurtain
         }
     }
 
+    /// <summary>One weather station's latest report (an airport METAR): where it is, its temperature and wind.</summary>
+    internal sealed class MapStation
+    {
+        public string Id = "";
+        public double Lat, Lon;
+        public int TempF = int.MinValue;   // int.MinValue = not reported
+        public int WindFrom = -1;          // degrees the wind blows from; -1 = variable or not reported
+        public int WindMph = -1;           // -1 = not reported
+        public int GustMph = -1;
+        public DateTime Utc;
+    }
+
+    /// <summary>A station chosen for the map, where it falls in map pixels, and the box its label takes.</summary>
+    internal sealed class PlacedStation
+    {
+        public MapStation Station;
+        public float X, Y;
+        public RectangleF Box;
+    }
+
+    /// <summary>The nearest NOAA tide station and its predicted highs and lows.</summary>
+    internal sealed class MapTide
+    {
+        public string Id = "";
+        public double Lat, Lon;
+        public DateTime[] Times = new DateTime[0];   // UTC, oldest first
+        public bool[] High = new bool[0];
+        public float[] Feet = new float[0];
+
+        /// <summary>
+        /// The tide's height at a moment, by the usual cosine curve between the high and low on either side of
+        /// it (good to a few inches for a picture). NaN outside the predictions.
+        /// </summary>
+        public double HeightAt(DateTime utc)
+        {
+            for (int i = 0; i + 1 < Times.Length; i++)
+            {
+                if (utc < Times[i] || utc > Times[i + 1]) continue;
+                double span = (Times[i + 1] - Times[i]).TotalSeconds;
+                double f = span > 0 ? (utc - Times[i]).TotalSeconds / span : 0;
+                return (Feet[i] + Feet[i + 1]) / 2.0 + (Feet[i] - Feet[i + 1]) / 2.0 * Math.Cos(Math.PI * f);
+            }
+            return double.NaN;
+        }
+
+        /// <summary>The first high or low after a moment, or -1.</summary>
+        public int NextEvent(DateTime utc)
+        {
+            for (int i = 0; i < Times.Length; i++) if (Times[i] > utc) return i;
+            return -1;
+        }
+    }
+
     /// <summary>One picture of the weather over the map's box, as numbers rather than colours.</summary>
     internal sealed class MapFrame
     {
@@ -67,12 +120,25 @@ namespace ClaudeCurtain
         public string BaseId = "";
         public MapFrame[] Radar = new MapFrame[0];   // oldest first
         public MapFrame[] Sat = new MapFrame[0];     // oldest first, all one kind
+        public MapStation[] Stations = new MapStation[0];
+        public MapTide Tide;                      // null = no tide station near
+        public int DemW, DemH;
+        public float[] Elevation;                 // metres over Box, for the relief (null = none)
+        public string DemId = "";
         public string Credit = "";
         public string Key = "";                   // changes whenever anything shown changes
 
+        public const double StationStaleHours = 2;   // older station reports are never shown
+        public const int WindyMph = 10;               // wind is labelled from this speed up
+        public const int MaxStations = 7;
+
         // ------------------------------------------------------------------ the index file
 
-        /// <summary>What map.txt lists. Lines: box S W N E | base FILE | radar UTC FILE | sat vis|ir UTC FILE | credit TEXT.</summary>
+        /// <summary>
+        /// What map.txt lists. Lines: box S W N E | base FILE | dem Z X0 Y0 X1 Y1 (elevation tiles
+        /// dem-Z-X-Y.png) | radar UTC FILE | sat vis|ir UTC FILE | station ID LAT LON TEMP_F WIND_FROM WIND_MPH
+        /// GUST_MPH UTC ("-" for a value not reported) | tidestation ID LAT LON | tide UTC H|L FEET | credit TEXT.
+        /// </summary>
         internal sealed class Index
         {
             public GeoBox Box;
@@ -81,7 +147,11 @@ namespace ClaudeCurtain
             public string Credit = "";
             public readonly List<KeyValuePair<DateTime, string>> Radar = new List<KeyValuePair<DateTime, string>>();
             public readonly List<KeyValuePair<DateTime, string>> Sat = new List<KeyValuePair<DateTime, string>>();
+            public readonly List<MapStation> Stations = new List<MapStation>();
             public string SatKind = "";
+            public int DemZoom = -1, DemX0, DemY0, DemX1, DemY1;
+            public MapTide Tide;
+            private readonly List<KeyValuePair<DateTime, KeyValuePair<bool, float>>> tides = new List<KeyValuePair<DateTime, KeyValuePair<bool, float>>>();
 
             public static Index Parse(string[] lines)
             {
@@ -121,11 +191,67 @@ namespace ClaudeCurtain
                         case "credit":
                             ix.Credit = line.Substring(6).Trim();
                             break;
+                        case "station":
+                            MapStation st = ParseStation(p);
+                            if (st != null && ix.Stations.Count < 200) ix.Stations.Add(st);
+                            break;
+                        case "dem":
+                            int z, x0, y0, x1, y1;
+                            if (p.Length == 6 && Whole(p[1], 1, 14, out z) && Whole(p[2], 0, 1 << 14, out x0) && Whole(p[3], 0, 1 << 14, out y0) &&
+                                Whole(p[4], x0, x0 + 9, out x1) && Whole(p[5], y0, y0 + 9, out y1))
+                            {
+                                ix.DemZoom = z; ix.DemX0 = x0; ix.DemY0 = y0; ix.DemX1 = x1; ix.DemY1 = y1;
+                            }
+                            break;
+                        case "tidestation":
+                            double tla, tlo;
+                            if (p.Length == 4 && PlainName(p[1]) && p[1].Length <= 12 && Num(p[2], out tla) && Num(p[3], out tlo) &&
+                                Math.Abs(tla) <= 90 && Math.Abs(tlo) <= 180)
+                                ix.Tide = new MapTide { Id = p[1], Lat = tla, Lon = tlo };
+                            break;
+                        case "tide":
+                            double ft;
+                            if (p.Length == 4 && Utc(p[1], out t) && (p[2] == "H" || p[2] == "L") && Num(p[3], out ft) && Math.Abs(ft) < 100 && ix.tides.Count < 64)
+                                ix.tides.Add(new KeyValuePair<DateTime, KeyValuePair<bool, float>>(t, new KeyValuePair<bool, float>(p[2] == "H", (float)ft)));
+                            break;
                     }
                 }
                 ix.Radar.Sort((a, b) => a.Key.CompareTo(b.Key));
                 ix.Sat.Sort((a, b) => a.Key.CompareTo(b.Key));
+                if (ix.Tide != null)
+                {
+                    ix.tides.Sort((a, b) => a.Key.CompareTo(b.Key));
+                    if (ix.tides.Count >= 2)
+                    {
+                        ix.Tide.Times = ix.tides.ConvertAll(ev => ev.Key).ToArray();
+                        ix.Tide.High = ix.tides.ConvertAll(ev => ev.Value.Key).ToArray();
+                        ix.Tide.Feet = ix.tides.ConvertAll(ev => ev.Value.Value).ToArray();
+                    }
+                    else ix.Tide = null;
+                }
                 return ix;
+            }
+
+            /// <summary>station ID LAT LON TEMP_F WIND_FROM WIND_MPH GUST_MPH UTC; null when malformed.</summary>
+            private static MapStation ParseStation(string[] p)
+            {
+                double lat, lon;
+                DateTime t;
+                if (p.Length != 9 || p[1].Length < 3 || p[1].Length > 6 || !Num(p[2], out lat) || !Num(p[3], out lon) ||
+                    Math.Abs(lat) > 90 || Math.Abs(lon) > 180 || !Utc(p[8], out t)) return null;
+                foreach (char ch in p[1]) if (!char.IsLetterOrDigit(ch)) return null;
+                MapStation s = new MapStation { Id = p[1], Lat = lat, Lon = lon, Utc = t };
+                int v;
+                if (Whole(p[4], -80, 140, out v)) s.TempF = v;
+                if (Whole(p[5], 0, 360, out v)) s.WindFrom = v % 360;
+                if (Whole(p[6], 0, 250, out v)) s.WindMph = v;
+                if (Whole(p[7], 0, 300, out v)) s.GustMph = v;
+                return s;
+            }
+
+            private static bool Whole(string s, int min, int max, out int v)
+            {
+                return int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out v) && v >= min && v <= max;
             }
 
             private static bool Num(string s, out double v)
@@ -188,6 +314,9 @@ namespace ClaudeCurtain
                 }
                 m.Radar = radar.ToArray();
                 m.Sat = sat.ToArray();
+                m.Stations = ix.Stations.FindAll(st => (utcNow - st.Utc).TotalHours <= StationStaleHours).ToArray();
+                m.Tide = ix.Tide;
+                if (ix.DemZoom > 0) LoadDem(m, dir, ix);
                 m.Key = m.MakeKey();
                 return m;
             }
@@ -197,15 +326,188 @@ namespace ClaudeCurtain
             }
         }
 
+        // ------------------------------------------------------------------ elevation
+
+        /// <summary>
+        /// Stitches the elevation tiles (AWS Terrain Tiles, "terrarium" PNGs in Web Mercator) into a grid over the
+        /// box, 0.0025 degree a cell. Leaves Elevation null when a tile is missing: no relief rather than a hole.
+        /// </summary>
+        private static void LoadDem(WeatherMap m, string dir, Index ix)
+        {
+            int z = ix.DemZoom, nx = ix.DemX1 - ix.DemX0 + 1, ny = ix.DemY1 - ix.DemY0 + 1;
+            float[][] tiles = new float[nx * ny][];
+            for (int ty = 0; ty < ny; ty++)
+            {
+                for (int tx = 0; tx < nx; tx++)
+                {
+                    int[] px;
+                    int w, h;
+                    string name = string.Format(CultureInfo.InvariantCulture, "dem-{0}-{1}-{2}.png", z, ix.DemX0 + tx, ix.DemY0 + ty);
+                    if (!ReadPixels(Path.Combine(dir, name), out px, out w, out h) || w != 256 || h != 256) return;
+                    tiles[ty * nx + tx] = Terrarium(px);
+                }
+            }
+            int gw, gh;
+            m.Elevation = StitchDem(tiles, z, ix.DemX0, ix.DemY0, nx, ny, m.Box, out gw, out gh);
+            m.DemW = gw;
+            m.DemH = gh;
+            m.DemId = string.Format(CultureInfo.InvariantCulture, "{0}/{1}/{2}/{3}/{4}", z, ix.DemX0, ix.DemY0, ix.DemX1, ix.DemY1);
+        }
+
+        /// <summary>Terrarium encoding: metres = R * 256 + G + B / 256 - 32768.</summary>
+        internal static float[] Terrarium(int[] px)
+        {
+            float[] e = new float[px.Length];
+            for (int i = 0; i < px.Length; i++)
+            {
+                int c = px[i];
+                e[i] = ((c >> 16) & 255) * 256f + ((c >> 8) & 255) + (c & 255) / 256f - 32768f;
+            }
+            return e;
+        }
+
+        /// <summary>Where a place falls in the whole world's Web Mercator pixels at a zoom (256-pixel tiles).</summary>
+        internal static void Mercator(double lat, double lon, int z, out double gx, out double gy)
+        {
+            double n = 256.0 * (1 << z);
+            gx = (lon + 180.0) / 360.0 * n;
+            double r = Math.Max(-85.0511, Math.Min(85.0511, lat)) * Math.PI / 180;
+            gy = (1 - Math.Log(Math.Tan(r) + 1 / Math.Cos(r)) / Math.PI) / 2 * n;
+        }
+
+        internal static float[] StitchDem(float[][] tiles, int z, int x0, int y0, int nx, int ny, GeoBox box, out int w, out int h)
+        {
+            w = Math.Max(2, Math.Min(2400, (int)Math.Round((box.East - box.West) / 0.0025)));
+            h = Math.Max(2, Math.Min(1200, (int)Math.Round((box.North - box.South) / 0.0025)));
+            double[] gxs = new double[w], gys = new double[h];
+            double unused;
+            for (int x = 0; x < w; x++)
+            {
+                Mercator(0, box.West + (x + 0.5) * (box.East - box.West) / w, z, out gxs[x], out unused);
+                gxs[x] -= x0 * 256.0 + 0.5;   // tile pixel centres sit on the half
+            }
+            for (int y = 0; y < h; y++)
+            {
+                Mercator(box.North - (y + 0.5) * (box.North - box.South) / h, 0, z, out unused, out gys[y]);
+                gys[y] -= y0 * 256.0 + 0.5;
+            }
+            int W = nx * 256, H = ny * 256;
+            float[] e = new float[w * h];
+            for (int y = 0; y < h; y++)
+            {
+                double fy = Math.Max(0, Math.Min(H - 1, gys[y]));
+                int ya = (int)fy, yb = Math.Min(H - 1, ya + 1);
+                float ty = (float)(fy - ya);
+                for (int x = 0; x < w; x++)
+                {
+                    double fx = Math.Max(0, Math.Min(W - 1, gxs[x]));
+                    int xa = (int)fx, xb = Math.Min(W - 1, xa + 1);
+                    float tx = (float)(fx - xa);
+                    float a = Sample(tiles, nx, xa, ya), b = Sample(tiles, nx, xb, ya), c = Sample(tiles, nx, xa, yb), d = Sample(tiles, nx, xb, yb);
+                    e[y * w + x] = a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
+                }
+            }
+            return e;
+        }
+
+        private static float Sample(float[][] tiles, int nx, int gx, int gy)
+        {
+            return tiles[(gy >> 8) * nx + (gx >> 8)][(gy & 255) * 256 + (gx & 255)];
+        }
+
+        // ------------------------------------------------------------------ station labels
+
+        internal static bool Windy(MapStation s) { return s.WindMph >= WindyMph; }
+
+        /// <summary>"14 mph", or "14–20 mph" when it gusts well above that (as the forecast writes wind).</summary>
+        internal static string WindText(MapStation s)
+        {
+            if (s.GustMph >= s.WindMph + 5) return s.WindMph.ToString(CultureInfo.InvariantCulture) + "–" + s.GustMph.ToString(CultureInfo.InvariantCulture) + " mph";
+            return s.WindMph.ToString(CultureInfo.InvariantCulture) + " mph";
+        }
+
+        /// <summary>
+        /// The stations to label on a w x h map of crop: inside it and clear of its edges (edge), its bottom band
+        /// (bottom) and the boxes already taken. The first is the one nearest home; each next one is the station
+        /// farthest from those already chosen, so the labels spread across coast, bay and inland, never closer
+        /// than spacing and never overlapping. At most max. label gives a label's box around its station.
+        /// </summary>
+        internal static List<PlacedStation> PickStations(MapStation[] all, GeoBox crop, int w, int h, double homeLat, double homeLon,
+                                                         Func<MapStation, RectangleF> label, float spacing, float edge, float bottom,
+                                                         List<RectangleF> taken, int max)
+        {
+            List<PlacedStation> cand = new List<PlacedStation>();
+            List<MapStation> sorted = new List<MapStation>(all ?? new MapStation[0]);
+            sorted.Sort((a, b) => string.CompareOrdinal(a.Id, b.Id));
+            foreach (MapStation s in sorted)
+            {
+                if (s.TempF == int.MinValue) continue;
+                float x = (float)((s.Lon - crop.West) / (crop.East - crop.West) * w);
+                float y = (float)((crop.North - s.Lat) / (crop.North - crop.South) * h);
+                RectangleF r = label(s);
+                r.Offset(x, y);
+                if (r.Left < edge || r.Right > w - edge || r.Top < edge || r.Bottom > h - bottom) continue;
+                bool blocked = false;
+                foreach (RectangleF t in taken ?? new List<RectangleF>()) if (t.IntersectsWith(r)) { blocked = true; break; }
+                if (!blocked) cand.Add(new PlacedStation { Station = s, X = x, Y = y, Box = r });
+            }
+            List<PlacedStation> picked = new List<PlacedStation>();
+            if (cand.Count == 0 || max <= 0) return picked;
+
+            float hx = w / 2f, hy = h / 2f;
+            if (!double.IsNaN(homeLat) && !double.IsNaN(homeLon))
+            {
+                hx = (float)((homeLon - crop.West) / (crop.East - crop.West) * w);
+                hy = (float)((crop.North - homeLat) / (crop.North - crop.South) * h);
+            }
+            PlacedStation first = cand[0];
+            foreach (PlacedStation c in cand)
+                if (Dist(c.X, c.Y, hx, hy) < Dist(first.X, first.Y, hx, hy)) first = c;
+            picked.Add(first);
+            cand.Remove(first);
+            float gutter = spacing * 0.08f;
+            while (picked.Count < max)
+            {
+                PlacedStation best = null;
+                float bestD = -1;
+                foreach (PlacedStation c in cand)
+                {
+                    float d = float.MaxValue;
+                    bool clash = false;
+                    RectangleF grown = c.Box;
+                    grown.Inflate(gutter, gutter);
+                    foreach (PlacedStation p in picked)
+                    {
+                        d = Math.Min(d, Dist(c.X, c.Y, p.X, p.Y));
+                        if (grown.IntersectsWith(p.Box)) clash = true;
+                    }
+                    if (clash || d < spacing) continue;
+                    if (d > bestD) { bestD = d; best = c; }
+                }
+                if (best == null) break;
+                picked.Add(best);
+                cand.Remove(best);
+            }
+            return picked;
+        }
+
+        private static float Dist(float ax, float ay, float bx, float by)
+        {
+            float dx = ax - bx, dy = ay - by;
+            return (float)Math.Sqrt(dx * dx + dy * dy);
+        }
+
         /// <summary>The same map without pictures that have grown too old (itself when none have).</summary>
         internal WeatherMap Fresh(DateTime utcNow)
         {
             Func<MapFrame[], MapFrame[]> keep = all => Array.FindAll(all, f => (utcNow - f.Utc).TotalHours <= StaleHours);
             MapFrame[] r = keep(Radar), s = keep(Sat);
-            if (r.Length == Radar.Length && s.Length == Sat.Length) return this;
+            MapStation[] st = Array.FindAll(Stations, x => (utcNow - x.Utc).TotalHours <= StationStaleHours);
+            if (r.Length == Radar.Length && s.Length == Sat.Length && st.Length == Stations.Length) return this;
             WeatherMap m = (WeatherMap)MemberwiseClone();
             m.Radar = r;
             m.Sat = s;
+            m.Stations = st;
             m.Key = m.MakeKey();
             return m;
         }
@@ -213,9 +515,12 @@ namespace ClaudeCurtain
         private string MakeKey()
         {
             StringBuilder b = new StringBuilder();
-            b.Append(Box).Append('|').Append(BaseId);
+            b.Append(Box).Append('|').Append(BaseId).Append('|').Append(DemId);
             foreach (MapFrame f in Radar) b.Append('|').Append(f.Id);
             foreach (MapFrame f in Sat) b.Append('|').Append(f.Id);
+            foreach (MapStation s in Stations)
+                b.Append('|').Append(s.Id).Append(' ').Append(s.TempF).Append(' ').Append(s.WindFrom).Append(' ').Append(s.WindMph).Append(' ').Append(s.GustMph);
+            if (Tide != null) b.Append("|tide ").Append(Tide.Id).Append(' ').Append(Tide.Times.Length > 0 ? Tide.Times[0].Ticks : 0);
             return b.ToString();
         }
 
@@ -586,6 +891,61 @@ namespace ClaudeCurtain
                 sat.Add(fr);
             }
             m.Sat = sat.ToArray();
+
+            // Stations: cool and windy on the coast, warmer inland, as on any summer coast.
+            double[,] st =
+            {
+                // km east, km north (of home), F, wind from, mph, gust
+                { -60, 19, 55, 300, 17, 24 }, { -61, -21, 56, 310, 21, -1 }, { -46, -7, 57, 290, 12, -1 }, { -24, 6, 59, 270, 8, -1 },
+                { -6, -14, 61, 250, 6, -1 }, { 14, 18, 64, 240, 5, -1 }, { 33, -16, 68, -1, 0, -1 }, { 44, 10, 67, 230, 7, -1 },
+                { 34, 30, 63, 260, 11, -1 }, { 4, -31, 65, 200, 4, -1 }, { -38, 27, 58, 280, 9, -1 },
+            };
+            m.Stations = new MapStation[st.GetLength(0)];
+            for (int i = 0; i < m.Stations.Length; i++)
+            {
+                m.Stations[i] = new MapStation
+                {
+                    Id = "S" + (i + 1).ToString("00", CultureInfo.InvariantCulture), Lat = lat + st[i, 1] / KmPerDegree, Lon = lon + st[i, 0] / kmLon,
+                    TempF = (int)st[i, 2], WindFrom = (int)st[i, 3], WindMph = (int)st[i, 4], GustMph = (int)st[i, 5], Utc = nowUtc,
+                };
+            }
+
+            // The tide, at the river mouth: rising towards a high in about two hours.
+            double[] hours = { -10.5, -4.2, 2.1, 8.4, 14.3, 20.7, 26.9 };
+            float[] feet = { 5.9f, 0.6f, 6.3f, 2.1f, 5.7f, -0.2f, 6.6f };
+            m.Tide = new MapTide { Id = "SAMPLE", Lat = lat - 13 / KmPerDegree, Lon = lon - 58 / kmLon };
+            m.Tide.Times = Array.ConvertAll(hours, hh => nowUtc.AddHours(hh));
+            m.Tide.High = Array.ConvertAll(feet, ft => ft > 3);
+            m.Tide.Feet = feet;
+
+            // Hills: a coast range cut by the river, a mountain to the south-east, rolling country between.
+            int dw = 1200, dh = 480;
+            m.DemW = dw;
+            m.DemH = dh;
+            m.DemId = "sample";
+            m.Elevation = new float[dw * dh];
+            for (int y = 0; y < dh; y++)
+            {
+                double yn = (y + 0.5) / dh;
+                double coast = 0.23 + 0.022 * Math.Sin(yn * 5.3 + 0.4) + 0.011 * Math.Sin(yn * 13.7 + 1.1);
+                for (int x = 0; x < dw; x++)
+                {
+                    double xn = (x + 0.5) / dw;
+                    double kmIn = (xn - coast) * boxKmW, e;
+                    if (kmIn < 0) e = -20 + kmIn * 0.5;
+                    else
+                    {
+                        double ridge = 640 * Math.Exp(-Math.Pow((kmIn - 15) / 8.0, 2)) * (0.55 + 0.6 * Noise(xn * 14, yn * 8));
+                        double ex = homeX(xn, yn) - 38, ey = homeY(xn, yn) + 24;
+                        double mount = 1150 * Math.Exp(-(ex * ex + ey * ey) / (2 * 13.0 * 13.0)) * (0.8 + 0.4 * Noise(xn * 30, yn * 12));
+                        double hills = 300 * Math.Max(0, Noise(xn * 22 + 5, yn * 11) - 0.3) * Smooth01(kmIn / 20);
+                        double ry = 0.585 - 0.12 * (xn - 0.23) + 0.03 * Math.Sin(xn * 9.0 + 0.3);
+                        double valley = Math.Exp(-Math.Pow((yn - ry) * boxKmH / 7.0, 2));
+                        e = (ridge + mount + hills + 20 * Smooth01(kmIn / 3)) * (1 - 0.88 * valley);
+                    }
+                    m.Elevation[y * dw + x] = (float)e;
+                }
+            }
             m.Key = m.MakeKey();
             return m;
         }
@@ -633,18 +993,18 @@ namespace ClaudeCurtain
         {
             public string Key;
             public long Used;
-            public Bitmap Water, Shore, Overlay;
+            public Bitmap Base, Shore, Overlay;
             public string OverlayKey;
             public readonly Dictionary<string, Bitmap> Frames = new Dictionary<string, Bitmap>();
 
             public void Dispose()
             {
-                if (Water != null) Water.Dispose();
+                if (Base != null) Base.Dispose();
                 if (Shore != null) Shore.Dispose();
                 if (Overlay != null) Overlay.Dispose();
                 foreach (Bitmap b in Frames.Values) b.Dispose();
                 Frames.Clear();
-                Water = Shore = Overlay = null;
+                Base = Shore = Overlay = null;
             }
         }
 
@@ -660,7 +1020,7 @@ namespace ClaudeCurtain
                 if (e.Key == key) { e.Used = ++clock; return e; }
             }
             Entry n = new Entry { Key = key, Used = ++clock };
-            RenderBase(m, crop, w, h, out n.Water, out n.Shore);
+            RenderBase(m, crop, w, h, out n.Base, out n.Shore);
             entries.Add(n);
             while (entries.Count > 4)
             {
@@ -672,9 +1032,9 @@ namespace ClaudeCurtain
             return n;
         }
 
-        internal static Bitmap Water(WeatherMap m, GeoBox crop, int w, int h)
+        internal static Bitmap Base(WeatherMap m, GeoBox crop, int w, int h)
         {
-            lock (gate) { return Get(m, crop, w, h).Water; }
+            lock (gate) { return Get(m, crop, w, h).Base; }
         }
 
         internal static Bitmap Shore(WeatherMap m, GeoBox crop, int w, int h)
@@ -776,7 +1136,16 @@ namespace ClaudeCurtain
             return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
         }
 
-        private static void RenderBase(WeatherMap m, GeoBox crop, int w, int h, out Bitmap water, out Bitmap shore)
+        /// <summary>
+        /// The map's ground, drawn into the still block: the land's relief, contour lines, and the water over
+        /// them; and, as a separate picture that goes over the weather, the shoreline.
+        ///   Relief    hills lit from the north-west (the cartographer's convention), heights exaggerated a
+        ///             little, so the ranges read at a glance; black can't be darkened, so slopes facing the
+        ///             light brighten and high ground takes a faint warm tint, and valleys stay black.
+        ///   Contours  a hairline every 200 m, drawn per pixel from the height and its slope, so the lines are
+        ///             smooth at any size without tracing them.
+        /// </summary>
+        private static void RenderBase(WeatherMap m, GeoBox crop, int w, int h, out Bitmap ground, out Bitmap shore)
         {
             // Coverage of water per screen pixel, from four samples (the source is finer than the screen).
             float[] cov = new float[w * h];
@@ -792,21 +1161,121 @@ namespace ClaudeCurtain
                     cov[y * w + x] = s / (4 * 255f);
                 }
             }
-            int[] wp = new int[w * h], sp = new int[w * h];
+            float[] elev = null;
+            if (m.Elevation != null && m.DemW > 1 && m.DemH > 1)
+            {
+                float[] ex, ey;
+                Mapping(m.Box, crop, w, h, m.DemW, m.DemH, 0.5f, out ex, out ey);
+                elev = new float[w * h];
+                for (int y = 0; y < h; y++)
+                    for (int x = 0; x < w; x++)
+                        elev[y * w + x] = BilinearF(m.Elevation, m.DemW, m.DemH, ex[x], ey[y]);
+                // Softened a little (two box passes, close to a Gaussian): the tiles are coarser than the screen,
+                // and their noise would otherwise make the shading grainy and the contours scratchy.
+                int radius = Math.Max(1, (int)Math.Round(w / 360.0));
+                for (int pass = 0; pass < 2; pass++) elev = BoxBlur(elev, w, h, radius);
+            }
+            double mx = crop.KmWide * 1000.0 / w, my = crop.KmTall * 1000.0 / h;   // metres a pixel
+            double alt = ReliefSunDegrees * Math.PI / 180, az = 315 * Math.PI / 180;
+            double lx = Math.Sin(az) * Math.Cos(alt), ly = Math.Cos(az) * Math.Cos(alt), lz = Math.Sin(alt);
+
+            int[] gp = new int[w * h], sp = new int[w * h];
             for (int y = 0; y < h; y++)
             {
+                int yn = Math.Max(0, y - 1), ys = Math.Min(h - 1, y + 1);
                 for (int x = 0; x < w; x++)
                 {
-                    int i = y * w + x;
-                    wp[i] = Premul(WaterTone, cov[i]);
-                    float gx = cov[y * w + Math.Min(w - 1, x + 1)] - cov[y * w + Math.Max(0, x - 1)];
-                    float gy = cov[Math.Min(h - 1, y + 1) * w + x] - cov[Math.Max(0, y - 1) * w + x];
+                    int i = y * w + x, xw = Math.Max(0, x - 1), xe = Math.Min(w - 1, x + 1);
+                    float land = 1 - cov[i];
+                    float r = 0, g = 0, b = 0;
+                    if (elev != null && land > 0.01f)
+                    {
+                        float e0 = Math.Max(0f, elev[i]);
+                        float dE = Math.Max(0f, elev[y * w + xe]) - Math.Max(0f, elev[y * w + xw]);
+                        float dN = Math.Max(0f, elev[yn * w + x]) - Math.Max(0f, elev[ys * w + x]);
+                        // the ground's normal, heights exaggerated, against the light: brighter only where lit
+                        double nx = -ReliefExaggeration * dE / (2 * mx), ny = -ReliefExaggeration * dN / (2 * my), len = Math.Sqrt(nx * nx + ny * ny + 1);
+                        double lit = Math.Max(0, (nx * lx + ny * ly + lz) / len - lz) / (1 - lz);
+                        double high = SmoothD(e0 / 1300.0);
+                        float level = (float)(0.13 * high + 0.55 * Math.Min(1, lit * 1.6) * (0.3 + 0.7 * Math.Sqrt(high)));
+                        r = ReliefTone.R * level; g = ReliefTone.G * level; b = ReliefTone.B * level;
+                        // a contour where the height crosses a 200 m level, about a pixel wide whatever the slope
+                        float slope = (float)Math.Sqrt(dE * dE + dN * dN) / 2f;   // metres a pixel
+                        if (e0 > ContourMetres * 0.5f && slope > 0.5f)
+                        {
+                            float off = Math.Abs(e0 - (float)Math.Round(e0 / ContourMetres) * ContourMetres) / slope;
+                            float a = (1 - off / 0.85f) * ContourStrength * Math.Min(1f, land * 1.5f);
+                            if (a > 0)
+                            {
+                                r += (ContourTone.R - r) * a; g += (ContourTone.G - g) * a; b += (ContourTone.B - b) * a;
+                            }
+                        }
+                        r *= land; g *= land; b *= land;
+                    }
+                    float c = cov[i];
+                    r += WaterTone.R * c; g += WaterTone.G * c; b += WaterTone.B * c;
+                    gp[i] = unchecked((int)0xFF000000) | (Byte(r) << 16) | (Byte(g) << 8) | Byte(b);
+
+                    float gx = cov[y * w + xe] - cov[y * w + xw];
+                    float gy = cov[ys * w + x] - cov[yn * w + x];
                     float edge = (float)Math.Sqrt(gx * gx + gy * gy) * 0.62f;
                     sp[i] = Premul(ShoreTone, Math.Min(1f, edge));
                 }
             }
-            water = FromPixels(wp, w, h);
+            ground = FromPixels(gp, w, h);
             shore = FromPixels(sp, w, h);
+        }
+
+        public const double ReliefSunDegrees = 40;     // the light's height
+        public const double ReliefExaggeration = 2.4;  // at this scale real hills look flat
+        public const float ContourMetres = 200f;
+        public const float ContourStrength = 0.45f;
+        internal static readonly Color ReliefTone = Color.FromArgb(120, 114, 106);
+        internal static readonly Color ContourTone = Color.FromArgb(82, 78, 72);
+
+        /// <summary>A separable box blur (running sums), edges clamped.</summary>
+        private static float[] BoxBlur(float[] src, int w, int h, int r)
+        {
+            float[] tmp = new float[w * h], dst = new float[w * h];
+            float k = 1f / (2 * r + 1);
+            for (int y = 0; y < h; y++)
+            {
+                int row = y * w;
+                float sum = 0;
+                for (int i = -r; i <= r; i++) sum += src[row + Math.Max(0, Math.Min(w - 1, i))];
+                for (int x = 0; x < w; x++)
+                {
+                    tmp[row + x] = sum * k;
+                    sum += src[row + Math.Min(w - 1, x + r + 1)] - src[row + Math.Max(0, x - r)];
+                }
+            }
+            for (int x = 0; x < w; x++)
+            {
+                float sum = 0;
+                for (int i = -r; i <= r; i++) sum += tmp[Math.Max(0, Math.Min(h - 1, i)) * w + x];
+                for (int y = 0; y < h; y++)
+                {
+                    dst[y * w + x] = sum * k;
+                    sum += tmp[Math.Min(h - 1, y + r + 1) * w + x] - tmp[Math.Max(0, y - r) * w + x];
+                }
+            }
+            return dst;
+        }
+
+        private static int Byte(float v) { return v <= 0 ? 0 : (v >= 255 ? 255 : (int)(v + 0.5f)); }
+        private static double SmoothD(double t) { t = Math.Max(0, Math.Min(1, t)); return t * t * (3 - 2 * t); }
+
+        private static float BilinearF(float[] v, int gw, int gh, float x, float y)
+        {
+            if (x < 0) x = 0;
+            if (y < 0) y = 0;
+            if (x > gw - 1) x = gw - 1;
+            if (y > gh - 1) y = gh - 1;
+            int x0 = (int)x, y0 = (int)y;
+            int x1 = x0 < gw - 1 ? x0 + 1 : x0, y1 = y0 < gh - 1 ? y0 + 1 : y0;
+            float tx = x - x0, ty = y - y0;
+            float a = v[y0 * gw + x0], b = v[y0 * gw + x1], c = v[y1 * gw + x0], d = v[y1 * gw + x1];
+            return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
         }
 
         private static Bitmap RenderFrame(WeatherMap m, GeoBox crop, int w, int h, MapFrame f)
