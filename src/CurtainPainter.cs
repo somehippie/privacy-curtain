@@ -13,17 +13,18 @@ namespace ClaudeCurtain
     /// <summary>
     /// Draws the curtain. Everything follows one proportional system built on the golden ratio φ ≈ 1.618.
     ///
-    /// Grid    On a landscape screen the composition is two columns whose widths are φ : 1: the time and the
-    ///         message on the left, live data on the right, a hairline between them. On a portrait screen the
-    ///         data moves under the message. The composition rests on the screen's golden section (the space
-    ///         above it and the space below it are 1 : φ).
+    /// Grid    On a landscape screen the composition is two columns whose widths are φ : 1: the time, the
+    ///         weather map and the message on the left, live data on the right, a hairline between them. On a
+    ///         portrait screen the data moves under the message. The composition rests on the screen's golden
+    ///         section (the space above it and the space below it are 1 : φ).
     /// Type    One family (Bahnschrift, a DIN design that ships with Windows). Every size is the clock size
     ///         divided by a power of φ; every gap is a step on the same scale. Large type is aligned by its
     ///         ink rather than its side bearing, the colon sits on the optical centre of the digits, and
     ///         small capitals are letter-spaced.
     /// Data    Ten-minute sparklines for CPU and network, proportion bars for memory and disk, the next six hours (temperature curve, rain bars), and a
     ///         forecast table with weather symbols drawn in code. Values are always printed as text beside
-    ///         their graphic, so nothing depends on reading a chart.
+    ///         their graphic, so nothing depends on reading a chart. A weather map (radar when rain is near,
+    ///         clouds and fog otherwise; see WeatherMap) drawn in the same palette.
     /// Colour  Warm neutrals in four text tones plus one accent. Contrast on black is checked by the
     ///         self-tests: every text tone meets WCAG AA, body text meets AAA.
     /// Motion  The composition is rendered once into an image (again only when something on it changes)
@@ -31,7 +32,7 @@ namespace ClaudeCurtain
     ///         burn-in with horizontal and vertical periods in the ratio 1 : φ, a path that never repeats.
     ///         It fades in when the curtain rises and cross-fades when the minute turns. The accent rule
     ///         breathes slowly while Claude works. PIN dots ease in as they are typed, and a wrong PIN shakes
-    ///         them before they fade.
+    ///         them before they fade. Every 30 seconds the map replays its past hour in about five.
     /// </summary>
     internal sealed class CurtainPainter : IDisposable
     {
@@ -149,7 +150,7 @@ namespace ClaudeCurtain
 
             bool pinAnim = now - wrongStart < ShakeMs + SwapMs + 60 || now - wrongEnd < SwapMs + 60 || now - stateSince < SwapMs + 60;
             for (int i = 0; i < shownDigits && !pinAnim; i++) pinAnim = now - dotBorn[i] < DotPopMs + 40;
-            fast = now - firstPaint < FadeInMs + 60 || prev != null || pinAnim;
+            fast = now - firstPaint < FadeInMs + 60 || prev != null || pinAnim || mapFading;
         }
 
         private void TrackPin(DisplayState s, long now)
@@ -189,6 +190,7 @@ namespace ClaudeCurtain
             g.SmoothingMode = SmoothingMode.AntiAlias;
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            DrawMap(g, l, s, ox, oy, now, fadeIn);
 
             double breath = 0.62 + 0.38 * (0.5 - 0.5 * Math.Cos(2 * Math.PI * (now / 1000.0) / BreathSeconds));
             using (SolidBrush b = new SolidBrush(Fade(Accent, (float)breath * fadeIn)))
@@ -297,6 +299,16 @@ namespace ClaudeCurtain
             public bool Landscape, HasRight;
             public string ClockText = "";
             public Face Body, Label, Small;
+
+            // The weather map (Map is empty when there is none): its picture's place, its header, what it plays.
+            public RectangleF Map;
+            public float MapHeadBaseline, MapRuleY;
+            public WeatherMap MapData;
+            public MapFrame[] MapFrames = new MapFrame[0];
+            public bool MapRadar;
+            public GeoBox MapCrop;
+            public PointF MapHome = new PointF(float.NaN, float.NaN);   // in map pixels
+            public string MapOverlayKey = "";
             public readonly List<KeyValuePair<string, float>> Baselines = new List<KeyValuePair<string, float>>();
             private readonly List<Face> faces = new List<Face>();
 
@@ -313,8 +325,9 @@ namespace ClaudeCurtain
 
         private sealed class Op
         {
-            public int Kind;            // 0 text, 1 rect, 2 dot, 3 weather symbol, 4 sparkline, 5 bar, 6 droplet, 7 rain bar, 8 curve
+            public int Kind;            // 0 text, 1 rect, 2 dot, 3 weather symbol, 4 sparkline, 5 bar, 6 droplet, 7 rain bar, 8 curve, 9 picture
             public string Text;
+            public Func<Bitmap> Picture;   // kind 9: drawn at (X, Y) unscaled; fetched only when the block is drawn, owned by MapArt
             public Font Font;
             public float Ascent;
             public Color Color;
@@ -384,16 +397,17 @@ namespace ClaudeCurtain
             float unit = landscape ? Math.Max(16f, Math.Min(w, h) / 9f) : Math.Max(16f, Math.Min(w / 6.6f, h / 11.5f));
             for (int attempt = 0; attempt < 12; attempt++)
             {
-                Layout l = ComposeAt(s, unit, landscape);
+                Layout l = ComposeAt(s, unit, landscape, w * 0.90f, h * 0.90f, attempt == 11);
                 if (l == null) return null;
-                if ((l.Block.Width <= w * 0.90f && l.Block.Height <= h * 0.90f) || attempt == 11) return l;
+                if (l.Block != null) return l;
                 l.Dispose();
                 unit *= 0.92f;
             }
             return null;
         }
 
-        private static Layout ComposeAt(DisplayState s, float unit, bool landscape)
+        /// <summary>Lays out at one scale. When the result would not fit in maxW x maxH it is not drawn (Block stays null).</summary>
+        private static Layout ComposeAt(DisplayState s, float unit, bool landscape, float maxW, float maxH, bool final)
         {
             float c = unit * 2.15f;
             Func<double, float> st = k => (float)(c / Math.Pow(Phi, k));
@@ -466,10 +480,25 @@ namespace ClaudeCurtain
                     leftW = Math.Max(leftW, Measure(m, HintText, fLabel.Font, track));
                     leftW = Math.Max(leftW, Measure(m, AdminText, fSmall.Font, 0));
 
+                    // ---------------- the weather map: under the date, as wide as the column's text, its header
+                    // ruled like the data column's sections. On a landscape screen it takes the room between the
+                    // date and the message (which the data column decides), so it never moves anything else. The
+                    // PIN row shares the map's lowest band: while a PIN is typed the map steps back (see DrawMap).
+                    bool hasMap = s.Map != null;
+                    float mapHead = 0, mapRule = 0, mapTop = 0, mapMinH = 0;
+                    if (hasMap)
+                    {
+                        mapHead = yDate + st(3) + fLabel.CapHeight * 0.5f;
+                        mapRule = (float)Math.Round(mapHead + st(6) * 0.8f);
+                        mapTop = (float)Math.Round(mapRule + st(5.5));
+                        mapMinH = (float)Math.Round(Math.Max(leftW / (Phi * Phi * Phi), pinH + st(3)));
+                    }
+
                     // ---------------- right column: measured, then placed on the grid
                     float need = RightColumn(null, m, s, fData, fLabel, fSmall, track, unit, st, 0, 0, 0);
                     L.HasRight = need > 0;
-                    float lastLine = yDate + st(3) + pinH + st(3) + msgH;   // the message's last baseline, laid out naturally
+                    // the message's last baseline, laid out naturally
+                    float lastLine = hasMap ? mapTop + mapMinH + st(3) + msgH : yDate + st(3) + pinH + st(3) + msgH;
                     if (L.HasRight && landscape)
                     {
                         float rightH = RightColumn(new List<Op>(), m, s, fData, fLabel, fSmall, track, unit, st, need, 0, 0);
@@ -480,6 +509,14 @@ namespace ClaudeCurtain
                     L.PinX = 0;
                     L.PinHintBaseline = ruleTop - st(3);
                     L.PinDotsY = L.PinHintBaseline - fLabel.CapHeight - st(5) - dotRow / 2f;
+                    if (hasMap)
+                    {
+                        float mapBottom = (float)Math.Round(ruleTop - st(3));   // level with the PIN hint's baseline
+                        L.Map = new RectangleF(0, mapTop, (float)Math.Round(leftW), Math.Max(8f, mapBottom - mapTop));
+                        L.MapHeadBaseline = mapHead;
+                        L.MapRuleY = mapRule;
+                        AddMap(ops, m, s, L, fLabel, track, unit);
+                    }
                     y = ruleTop + ruleH + st(3) + fTitle.CapHeight;
                     L.Baselines.Add(new KeyValuePair<string, float>("C / \u03C6\u2074", y));
                     AddText(ops, m, title, fTitle, Primary, -InkLeft(title, fTitle), y, 0);
@@ -529,6 +566,7 @@ namespace ClaudeCurtain
                 L.OriginY = (float)Math.Round(-minY + pad);
                 int bw = (int)Math.Ceiling(maxX - minX) + 2 * pad;
                 int bh = (int)Math.Ceiling(maxY - minY) + 2 * pad;
+                if (!final && (Math.Max(1, bw) > maxW || Math.Max(1, bh) > maxH)) return L;   // too big: a smaller scale comes next
                 L.Block = new Bitmap(Math.Max(1, bw), Math.Max(1, bh), PixelFormat.Format32bppRgb);
                 using (Graphics g = Graphics.FromImage(L.Block))
                 {
@@ -544,6 +582,182 @@ namespace ClaudeCurtain
             {
                 L.Dispose();
                 throw;
+            }
+        }
+
+        // ================================================================== the weather map
+
+        /// <summary>
+        /// The map's still parts, drawn into the block: the header (what it shows; the picture's time is drawn
+        /// live), its rule, the water, and a note while there are no pictures yet. Decides radar or clouds and
+        /// which part of the area shows. The weather pictures, the shoreline over them and home are live.
+        /// </summary>
+        private static void AddMap(List<Op> ops, Graphics m, DisplayState s, Layout L, Face fLabel, float track, float unit)
+        {
+            WeatherMap map = s.Map;
+            int mw = (int)Math.Round(L.Map.Width), mh = (int)Math.Round(L.Map.Height);
+            bool radar = WeatherMap.ShowRadar(map, s.Hourly, s.Now, s.Lat, s.Lon);
+            if (s.MapMode == 1 && map.Radar.Length > 0) radar = true;
+            if (s.MapMode == 2 && map.Sat.Length > 0) radar = false;
+            L.MapData = map;
+            L.MapRadar = radar;
+            L.MapFrames = radar ? map.Radar : map.Sat;
+            GeoBox crop = WeatherMap.Crop(map.Box, s.Lat, s.Lon, mw, mh);
+            L.MapCrop = crop;
+
+            string what = radar ? "RADAR" : "CLOUDS";
+            if (!radar && map.Sat.Length > 0 && map.Sat[0].Kind == "ir") what += "   ·   INFRARED";
+            if (L.MapFrames.Length > 1) what += "   ·   PAST HOUR";
+            AddText(ops, m, what, fLabel, Tertiary, 0, L.MapHeadBaseline, track);
+            ops.Add(new Op { Kind = 1, X = 0, Y = L.MapRuleY, W = L.Map.Width, H = 1, Color = RuleColor });
+            ops.Add(new Op { Kind = 9, X = L.Map.X, Y = L.Map.Y, Picture = () => MapArt.Water(map, crop, mw, mh) });
+            if (L.MapFrames.Length == 0)
+            {
+                AddCentered(ops, m, "THE MAP WILL APPEAR WITH THE NEXT REFRESH", fLabel, Tertiary,
+                            L.Map.X + L.Map.Width / 2f, L.Map.Y + L.Map.Height / 2f + fLabel.CapHeight / 2f, track);
+            }
+
+            if (!double.IsNaN(s.Lat) && !double.IsNaN(s.Lon))
+            {
+                float hx = (float)((s.Lon - crop.West) / (crop.East - crop.West) * mw);
+                float hy = (float)((crop.North - s.Lat) / (crop.North - crop.South) * mh);
+                if (hx >= 0 && hx <= mw && hy >= 0 && hy <= mh) L.MapHome = new PointF(hx, hy);
+            }
+            L.MapOverlayKey = (radar ? "radar" : "clouds") + "|" + L.MapFrames.Length.ToString(CultureInfo.InvariantCulture) + "|" + map.Credit + "|" +
+                              L.MapHome.X.ToString("0.0", CultureInfo.InvariantCulture) + "," + L.MapHome.Y.ToString("0.0", CultureInfo.InvariantCulture) + "|" +
+                              fLabel.Font.Size.ToString("0.00", CultureInfo.InvariantCulture) + "|" + unit.ToString("0.00", CultureInfo.InvariantCulture);
+        }
+
+        public const int VeilMs = 300;
+        private bool mapFading;
+        private float mapVeil;
+        private long mapVeilAt = -1;
+
+        /// <summary>
+        /// The live part of the map: the weather picture (replaying the past hour at the end of every cycle),
+        /// the shoreline drawn over it so the coast stays readable under fog, home, the legend and credit, the
+        /// picture's time in the header, and during the replay a mark running along the header's rule. While
+        /// a PIN is typed (or a notice shows in the PIN row, which shares the map's lowest band) the map
+        /// fades to black, and comes back when the row clears.
+        /// </summary>
+        private void DrawMap(Graphics g, Layout l, DisplayState s, float ox, float oy, long now, float fadeIn)
+        {
+            mapFading = false;
+            if (l.MapData == null || l.Map.Width < 8 || l.Map.Height < 8) return;
+            WeatherMap map = l.MapData;
+            int mx = (int)Math.Round(ox + l.Map.X), my = (int)Math.Round(oy + l.Map.Y);
+            int mw = (int)Math.Round(l.Map.Width), mh = (int)Math.Round(l.Map.Height);
+
+            bool pinUp = s.PinState != PinGate.StateIdle || s.AdminNotice;
+            if (mapVeilAt < 0) mapVeil = pinUp ? 1f : 0f;
+            else
+            {
+                float step = Math.Max(0, now - mapVeilAt) / (float)VeilMs;
+                mapVeil = pinUp ? Math.Min(1f, mapVeil + step) : Math.Max(0f, mapVeil - step);
+            }
+            mapVeilAt = now;
+            float veil = InOutSine(mapVeil);
+            if (mapVeil > 0 && mapVeil < 1) mapFading = true;
+            if (veil > 0.004f)
+            {
+                using (SolidBrush black = new SolidBrush(Color.FromArgb((int)Math.Round(255 * veil), 0, 0, 0)))
+                    g.FillRectangle(black, mx, my, mw, mh);
+            }
+            float show = (1 - veil) * fadeIn;
+            float dim = (float)(s.NightDim > 0 && s.NightDim < 1 ? s.NightDim : 1.0) * show;
+            MapFrame[] fr = l.MapFrames;
+            if (fr.Length > 0)
+            {
+                int i, j;
+                float t, progress;
+                bool playing;
+                WeatherMap.LoopAt(fr.Length, now, out i, out j, out t, out progress, out playing);
+                Bitmap a = MapArt.Frame(map, l.MapCrop, mw, mh, fr[i], true);
+                Bitmap b = t > 0 && j != i ? MapArt.Frame(map, l.MapCrop, mw, mh, fr[j], false) : null;
+                if (b == null) t = 0;   // not ready yet: stay on this picture (it is rendered below)
+                DrawPicture(g, a, mx, my, dim * (1 - t));
+                if (b != null) DrawPicture(g, b, mx, my, dim * t);
+                if (t > 0 && t < 1) mapFading = true;
+
+                MapFrame shown = t < 0.5f ? fr[i] : fr[j];
+                string when = shown.Utc.ToLocalTime().ToString("t", CultureInfo.CurrentCulture).ToUpperInvariant();
+                float tw = Measure(g, when, l.Label.Font, l.Track);
+                DrawLiveText(g, when, l.Label, Fade(Tertiary, fadeIn), ox + l.Map.Right - tw, oy + l.MapHeadBaseline, l.Track);
+                if (playing)
+                {
+                    float segW = (float)Math.Round(Math.Max(l.Unit * 0.12f, l.Map.Width / fr.Length));
+                    float sx = (float)Math.Round(ox + l.Map.X + progress * (l.Map.Width - segW));
+                    using (SolidBrush mark = new SolidBrush(Fade(Secondary, fadeIn)))
+                        g.FillRectangle(mark, sx, (float)Math.Round(oy + l.MapRuleY) - 1, segW, 2);
+                }
+            }
+            DrawPicture(g, MapArt.Shore(map, l.MapCrop, mw, mh), mx, my, show);
+            Bitmap overlay = MapArt.Overlay(map, l.MapCrop, mw, mh, l.MapOverlayKey, og => DrawMapOverlay(og, l, mw, mh));
+            DrawPicture(g, overlay, mx, my, show);
+            if (fr.Length > 0) MapArt.WarmOne(map, l.MapCrop, mw, mh, fr);   // at most one picture a frame, so a replay never waits
+        }
+
+        /// <summary>
+        /// Home, and along the bottom edge (darkened a little, as under a photo caption, so the words read over
+        /// cloud and rain) the radar's legend at the left and the credit at the right.
+        /// </summary>
+        private static void DrawMapOverlay(Graphics og, Layout l, int mw, int mh)
+        {
+            og.SmoothingMode = SmoothingMode.AntiAlias;
+            og.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            og.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
+            Face f = l.Label;
+            float pad = (float)Math.Round(l.Unit * 0.14f);
+            float baseline = (float)Math.Round(mh - pad);
+            bool legend = l.MapRadar && l.MapFrames.Length > 0;
+            if (legend || l.MapData.Credit.Length > 0)
+            {
+                float band = (float)Math.Round(pad * 2.6f + f.CapHeight);
+                RectangleF r = new RectangleF(0, mh - band, mw, band);
+                using (LinearGradientBrush shade = new LinearGradientBrush(new PointF(0, r.Top - 1), new PointF(0, r.Bottom),
+                                                                         Color.FromArgb(0, 0, 0, 0), Color.FromArgb(170, 0, 0, 0)))
+                    og.FillRectangle(shade, r);
+            }
+            if (l.MapData.Credit.Length > 0)
+            {
+                string credit = l.MapData.Credit.ToUpperInvariant();
+                DrawText(og, credit, f.Font, Tertiary, (float)Math.Round(mw - pad - Measure(og, credit, f.Font, l.Track)), (float)Math.Round(baseline - f.Ascent), l.Track, 0);
+            }
+            if (legend)
+            {
+                float x = pad, sw = (float)Math.Round(f.CapHeight), gap = Math.Max(2f, (float)Math.Round(sw * 0.3f));
+                DrawText(og, "LIGHT", f.Font, Tertiary, x, (float)Math.Round(baseline - f.Ascent), l.Track, 0);
+                x += Measure(og, "LIGHT", f.Font, l.Track) + sw * 0.6f;
+                foreach (int dbz in new[] { 22, 30, 38, 46, 56 })
+                {
+                    int c = MapArt.RadarArgb(dbz);   // premultiplied: over black it shows as its RGB
+                    using (SolidBrush sb = new SolidBrush(Color.FromArgb(255, (c >> 16) & 255, (c >> 8) & 255, c & 255)))
+                        og.FillRectangle(sb, (float)Math.Round(x), baseline - sw, sw, sw);
+                    x += sw + gap;
+                }
+                DrawText(og, "HEAVY", f.Font, Tertiary, (float)Math.Round(x - gap + sw * 0.6f), (float)Math.Round(baseline - f.Ascent), l.Track, 0);
+            }
+            if (!float.IsNaN(l.MapHome.X))
+            {
+                float d = Math.Max(6f, (float)Math.Round(l.Unit / 14f)), ring = Math.Max(1.5f, d * 0.24f);
+                PointF p = l.MapHome;
+                using (SolidBrush halo = new SolidBrush(Color.Black))
+                    og.FillEllipse(halo, p.X - d / 2f - ring, p.Y - d / 2f - ring, d + 2 * ring, d + 2 * ring);
+                using (SolidBrush dot = new SolidBrush(Accent))
+                    og.FillEllipse(dot, p.X - d / 2f, p.Y - d / 2f, d, d);
+            }
+        }
+
+        private static void DrawPicture(Graphics g, Bitmap b, int x, int y, float alpha)
+        {
+            if (b == null || alpha <= 0.004f) return;
+            if (alpha >= 0.996f) { g.DrawImageUnscaled(b, x, y); return; }
+            using (ImageAttributes ia = new ImageAttributes())
+            {
+                ColorMatrix cm = new ColorMatrix();
+                cm.Matrix33 = alpha;
+                ia.SetColorMatrix(cm);
+                g.DrawImage(b, new Rectangle(x, y, b.Width, b.Height), 0, 0, b.Width, b.Height, GraphicsUnit.Pixel, ia);
             }
         }
 
@@ -858,6 +1072,21 @@ namespace ClaudeCurtain
             return true;
         }
 
+        /// <summary>The sun's height above the horizon in degrees at a moment and place (same NOAA equations; refraction ignored).</summary>
+        internal static double SunElevation(DateTime utc, double lat, double lon)
+        {
+            double hours = utc.TimeOfDay.TotalHours;
+            double g = 2 * Math.PI / (DateTime.IsLeapYear(utc.Year) ? 366 : 365) * (utc.DayOfYear - 1 + (hours - 12) / 24);
+            double eq = 229.18 * (0.000075 + 0.001868 * Math.Cos(g) - 0.032077 * Math.Sin(g)
+                                  - 0.014615 * Math.Cos(2 * g) - 0.040849 * Math.Sin(2 * g));
+            double decl = 0.006918 - 0.399912 * Math.Cos(g) + 0.070257 * Math.Sin(g) - 0.006758 * Math.Cos(2 * g)
+                          + 0.000907 * Math.Sin(2 * g) - 0.002697 * Math.Cos(3 * g) + 0.00148 * Math.Sin(3 * g);
+            double hourAngle = ((hours * 60 + eq + 4 * lon) / 4 - 180) * Math.PI / 180;   // from true solar time
+            double phi = lat * Math.PI / 180;
+            double cosZ = Math.Sin(phi) * Math.Sin(decl) + Math.Cos(phi) * Math.Cos(decl) * Math.Cos(hourAngle);
+            return 90 - Math.Acos(Math.Max(-1, Math.Min(1, cosZ))) * 180 / Math.PI;
+        }
+
         /// <summary>The current hour and the ones after it, oldest first.</summary>
         internal static HourPoint[] NextHours(HourPoint[] all, DateTime now, int count)
         {
@@ -1042,6 +1271,10 @@ namespace ClaudeCurtain
                     break;
                 case 8:
                     DrawTemperatureCurve(g, op, ox, oy, unit);
+                    break;
+                case 9:
+                    Bitmap pic = op.Picture != null ? op.Picture() : null;
+                    if (pic != null) g.DrawImageUnscaled(pic, (int)Math.Round(ox + op.X), (int)Math.Round(oy + op.Y));
                     break;
             }
         }

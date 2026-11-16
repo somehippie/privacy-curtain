@@ -113,8 +113,9 @@ Write-Host "Event log        : & '$(Join-Path $PSScriptRoot 'curtain-log.ps1')' 
 Write-Host 'Keep-awake       : sleep, display-off and screen saver are on hold until the curtain closes.'
 
 # Glanceable info on screen: CPU/RAM/network, uptime and disk are live from inside the curtain; the local
-# forecast (three days, plus the next hours) is fetched here in the background, keyless and never fatal,
-# and refreshed every 30 minutes for as long as this curtain is up. The curtain picks each refresh up live.
+# forecast (three days, plus the next hours) and the weather map (radar and satellite, the last hour) are
+# fetched here in the background, keyless and never fatal, and refreshed every 30 and every 5 minutes for
+# as long as this curtain is up. The curtain picks each refresh up live.
 try {
     $wx = Join-Path $PSScriptRoot 'curtain-weather.ps1'
     Start-Process -FilePath 'powershell.exe' -WindowStyle Hidden -ArgumentList @(

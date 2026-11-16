@@ -23,6 +23,7 @@ namespace ClaudeCurtain
                 TestAlerter(o);
                 TestSysStats(o);
                 TestPainter(o);
+                TestWeatherMap(o);
                 TestEnvironment();
             }
             catch (Exception ex)
@@ -290,6 +291,15 @@ namespace ClaudeCurtain
                 File.SetLastWriteTimeUtc(wx, DateTime.UtcNow.AddDays(-2));
                 s.Sample();
                 Check("sysstats: ignores a weather file older than a day", s.Weather.Length == 0);
+
+                // The map is decoded on a worker thread, so it appears a moment after map.txt does.
+                Check("sysstats: no map.txt means no map", s.Map == null);
+                SaveSolid(Path.Combine(dir, "base.png"), 40, 20, (x, y) => Color.FromArgb(72, 72, 72));
+                File.WriteAllLines(Path.Combine(dir, WeatherMap.IndexName), new[] { "box 44.4 -123.5 45.6 -120.5", "base base.png" }, Encoding.UTF8);
+                Stopwatch wait = Stopwatch.StartNew();
+                s.Sample();
+                while (s.Map == null && wait.ElapsedMilliseconds < 3000) { System.Threading.Thread.Sleep(20); s.Sample(); }
+                Check("sysstats: reads the weather map when map.txt appears", s.Map != null && s.Map.Radar.Length == 0 && s.Map.BaseW == 40);
             }
             finally
             {
@@ -306,9 +316,9 @@ namespace ClaudeCurtain
         private static void TestPainter(Options o)
         {
             Size[] screens = { new Size(1280, 720), new Size(1920, 1080), new Size(1920, 1200), new Size(2560, 1440), new Size(3440, 1440), new Size(1080, 1920) };
-            string[] states = { "idle", "typing", "wrong", "cooldown", "admin", "bright", "night" };
-            bool allFit = true, allOnScreen = true, columnsGolden = true;
-            string worst = "";
+            string[] states = { "idle", "typing", "wrong", "cooldown", "admin", "bright", "night", "clouds" };
+            bool allFit = true, allOnScreen = true, columnsGolden = true, mapPlaced = true;
+            string worst = "", mapWorst = "";
             long slowestMs = 0;
             foreach (Size scr in screens)
             {
@@ -334,6 +344,16 @@ namespace ClaudeCurtain
                             columnsGolden = false;
                             worst = state + " at " + scr.Width + "x" + scr.Height + ": " + l.LeftCol.Width + " : " + l.RightCol.Width;
                         }
+                        // The map: in the left column, under its own header (which is under the date), clear of the
+                        // message (the PIN row may share its lowest band), and big enough to read.
+                        RectangleF mp = l.Map;
+                        if (mp.IsEmpty || mp.Left < -0.5f || mp.Right > l.LeftCol.Right + 0.5f || mp.Top <= l.MapRuleY ||
+                            l.MapRuleY <= l.MapHeadBaseline || mp.Bottom > l.Rule.Top - l.Unit * 0.3f || mp.Height < l.Unit * 1.1f ||
+                            mp.Bottom < l.PinHintBaseline - 0.5f)
+                        {
+                            mapPlaced = false;
+                            mapWorst = state + " at " + scr.Width + "x" + scr.Height + ": map " + mp + ", rule at " + l.Rule.Top;
+                        }
                         // Eight hours of drift, one sample every 7 s: the composition never leaves the screen.
                         for (double t = 0; t < 8 * 3600; t += 7)
                         {
@@ -357,6 +377,8 @@ namespace ClaudeCurtain
             Check("painter: on landscape screens the two columns are exactly phi : 1" + (columnsGolden ? "" : " (" + worst + ")"), columnsGolden);
             Check("painter: the drift keeps everything on screen for 8 hours" + (allOnScreen ? "" : " (" + worst + ")"), allOnScreen);
             Check("painter: a re-render takes under 150 ms", slowestMs < 150);
+            Check("map: sits in the left column under its header, clear of the message, with the PIN row in its lowest band" +
+                  (mapPlaced ? "" : " (" + mapWorst + ")"), mapPlaced);
 
             // Stable geometry: wildly different readings, times and forecasts must give the very same frame.
             {
@@ -396,7 +418,7 @@ namespace ClaudeCurtain
                     foreach (DisplayState v in variants)
                     {
                         CurtainPainter.Layout l = CurtainPainter.Compose(v, scr.Width, scr.Height);
-                        string g = l.Block.Width + "x" + l.Block.Height + " " + l.LeftCol + " " + l.RightCol;
+                        string g = l.Block.Width + "x" + l.Block.Height + " " + l.LeftCol + " " + l.RightCol + " " + l.Map;
                         l.Dispose();
                         if (first == null) first = g;
                         else if (g != first) { stable = false; diff = scr.Width + "x" + scr.Height + ": " + first + " vs " + g; }
@@ -484,6 +506,197 @@ namespace ClaudeCurtain
                   Math.Abs(a.X - later.X) <= 1 && Math.Abs(a.Y - later.Y) <= 1);
             Check("painter: it rests on the golden section (space above : below = 1 : phi)",
                   Math.Abs((1440 - 800) / (1 + CurtainPainter.Phi) - a.Y) <= 1);
+        }
+
+        /// <summary>
+        /// The weather map: reading map.txt and its pictures (radar colours back to dBZ, land and water, stale
+        /// and missing pictures), choosing radar or clouds, which part of the area shows, the replay's timing,
+        /// the sun's height, and that the replay and the PIN veil animate and then let the screen rest.
+        /// </summary>
+        private static void TestWeatherMap(Options o)
+        {
+            // Radar colours: every whole dBZ comes back as itself; known points of NOAA's ramp; not-radar is nothing.
+            bool roundTrip = true;
+            for (int d = 1; d <= 80; d++) if (WeatherMap.RadarDbz(unchecked((int)0xFF000000) | WeatherMap.RadarRgb(d)) != d) roundTrip = false;
+            Check("map: every radar colour reads back as its dBZ", roundTrip);
+            Check("map: NOAA's ramp: green is 25 dBZ, yellow 40, blue 20, an in-between colour 7, transparent nothing",
+                  WeatherMap.RadarDbz(unchecked((int)0xFF00FF00)) == 25 && WeatherMap.RadarDbz(unchecked((int)0xFFFFFF00)) == 40 &&
+                  WeatherMap.RadarDbz(unchecked((int)0xFF0000F6)) == 20 && WeatherMap.RadarDbz(unchecked((int)0xFF4AA3A3)) == 7 &&
+                  WeatherMap.RadarDbz(0x0000FF00) == 0 && WeatherMap.RadarDbz(unchecked((int)0xFFFFFFFF)) == 0);
+
+            // The index file.
+            WeatherMap.Index ix = WeatherMap.Index.Parse(new[]
+            {
+                "# weather map for the curtain",
+                "box 44.4 -123.5 45.6 -120.5",
+                "base map-base-a.png",
+                "radar 2026-11-15T18:40:00Z radar-b.png",
+                "radar 2026-11-15T18:32:00Z radar-a.png",
+                "radar 2026-11-15T18:24:00Z ..\\..\\secret.png",
+                "sat vis 2026-11-15T18:40:00Z sat-vis-a.jpg",
+                "sat ir 2026-11-15T18:30:00Z sat-ir-a.jpg",
+                "credit NOAA  ·  © OpenStreetMap",
+                "nonsense line",
+            });
+            Check("map: map.txt is read (box, base, pictures oldest first, one satellite kind, credit; a path is refused)",
+                  ix.HasBox && Math.Abs(ix.Box.North - 45.6) < 1e-9 && ix.Base == "map-base-a.png" && ix.Radar.Count == 2 &&
+                  ix.Radar[0].Value == "radar-a.png" && ix.Sat.Count == 1 && ix.SatKind == "vis" && ix.Credit == "NOAA  ·  © OpenStreetMap");
+            Check("map: a box that is not a box is refused", !WeatherMap.Index.Parse(new[] { "box 45 -120 44 -121" }).HasBox);
+
+            // Loading real files: land and water, radar values, satellite grey, a stale and a missing picture skipped.
+            string dir = Path.Combine(o.LocalDir, "selftest-map-" + Process.GetCurrentProcess().Id);
+            try
+            {
+                Directory.CreateDirectory(dir);
+                DateTime now = new DateTime(2026, 11, 15, 18, 45, 0, DateTimeKind.Utc);
+                SaveSolid(Path.Combine(dir, "base.png"), 40, 20, (x, y) => x < 20 ? Color.FromArgb(128, 128, 128) : Color.FromArgb(72, 72, 72));
+                SaveSolid(Path.Combine(dir, "radar-new.png"), 30, 12, (x, y) => x >= 10 && x < 13 && y >= 4 && y < 7 ? Color.FromArgb(0, 255, 0) : Color.Transparent);
+                SaveSolid(Path.Combine(dir, "radar-old.png"), 30, 12, (x, y) => Color.Transparent);
+                SaveSolid(Path.Combine(dir, "sat.png"), 30, 12, (x, y) => Color.FromArgb(180, 180, 180));
+                File.WriteAllLines(Path.Combine(dir, WeatherMap.IndexName), new[]
+                {
+                    "box 44.4 -123.5 45.6 -120.5", "base base.png",
+                    "radar 2026-11-15T14:00:00Z radar-old.png",
+                    "radar 2026-11-15T18:40:00Z radar-new.png",
+                    "radar 2026-11-15T18:44:00Z radar-missing.png",
+                    "sat vis 2026-11-15T18:40:00Z sat.png",
+                    "credit NOAA",
+                }, Encoding.UTF8);
+                WeatherMap m = WeatherMap.Load(dir, now);
+                Check("map: the pictures load: water and land, radar dBZ, satellite grey; stale and missing ones are skipped",
+                      m != null && m.Water[0] == 255 && m.Water[39] == 0 && m.Radar.Length == 1 && m.Radar[0].Values[5 * 30 + 11] == 25 &&
+                      m.Radar[0].Values[0] == 0 && m.Sat.Length == 1 && m.Sat[0].Kind == "vis" && m.Sat[0].Values[0] == 180);
+                Check("map: pictures that grow too old drop out without a reload",
+                      m != null && m.Fresh(now) == m && m.Fresh(now.AddHours(4)).Radar.Length == 0 && m.Fresh(now.AddHours(4)).Key != m.Key);
+                File.Delete(Path.Combine(dir, "base.png"));
+                Check("map: no land and water map means no map", WeatherMap.Load(dir, now) == null);
+            }
+            finally
+            {
+                try { Directory.Delete(dir, true); } catch { }
+            }
+
+            // Radar or clouds.
+            {
+                GeoBox box = new GeoBox(44.4, -123.5, 45.6, -120.5);
+                Func<double, double, MapFrame> rain = (lat, lon) =>
+                {
+                    MapFrame f = new MapFrame { Kind = "radar", W = 300, H = 120, Values = new byte[300 * 120], Utc = DateTime.UtcNow };
+                    if (!double.IsNaN(lat))
+                    {
+                        int cx = (int)((lon - box.West) / (box.East - box.West) * 300), cy = (int)((box.North - lat) / (box.North - box.South) * 120);
+                        for (int y = cy - 2; y <= cy + 2; y++) for (int x = cx - 2; x <= cx + 2; x++) f.Values[y * 300 + x] = 30;
+                    }
+                    return f;
+                };
+                Func<MapFrame, WeatherMap> make = r => new WeatherMap
+                {
+                    Box = box, Radar = new[] { r },
+                    Sat = new[] { new MapFrame { Kind = "vis", W = 4, H = 4, Values = new byte[16], Utc = DateTime.UtcNow } },
+                };
+                DateTime now = new DateTime(2026, 11, 15, 10, 42, 0);
+                Func<int, string, HourPoint[]> hours = (pop, text) =>
+                {
+                    HourPoint[] h = new HourPoint[6];
+                    for (int i = 0; i < 6; i++) h[i] = new HourPoint { Start = new DateTime(2026, 11, 15, 10 + i, 0, 0), Pop = i == 2 ? pop : 5, Text = i == 2 ? text : "Sunny" };
+                    return h;
+                };
+                double hLat = 45.0, hLon = -122.0;
+                bool dry = !WeatherMap.ShowRadar(make(rain(double.NaN, 0)), hours(10, "Partly Sunny"), now, hLat, hLon);
+                bool chance = WeatherMap.ShowRadar(make(rain(double.NaN, 0)), hours(40, "Mostly Cloudy"), now, hLat, hLon);
+                bool words = WeatherMap.ShowRadar(make(rain(double.NaN, 0)), hours(15, "Slight Chance Light Rain"), now, hLat, hLon);
+                bool later = !WeatherMap.ShowRadar(make(rain(double.NaN, 0)), hours(5, "Sunny"), now, hLat, hLon) &&
+                             !WeatherMap.ShowRadar(make(rain(double.NaN, 0)), new[] { new HourPoint { Start = now.AddHours(4), Pop = 90, Text = "Rain" } }, now, hLat, hLon);
+                bool near = WeatherMap.ShowRadar(make(rain(45.2, -122.1)), hours(5, "Sunny"), now, hLat, hLon);
+                bool far = !WeatherMap.ShowRadar(make(rain(45.0, -120.9)), hours(5, "Sunny"), now, hLat, hLon);   // ~87 km east
+                Check("map: dry hours ahead and no rain near show the clouds", dry && later);
+                Check("map: a 30% chance in the next three hours, or rain in the forecast's words, shows the radar", chance && words);
+                Check("map: rain on the radar within 50 km shows the radar; farther away it does not", near && far);
+            }
+
+            // Which part of the area shows.
+            {
+                GeoBox box = new GeoBox(44.4, -123.5, 45.6, -120.5);
+                GeoBox c = WeatherMap.Crop(box, 45.0, -122.0, 873, 390);
+                double homeX = (-122.0 - c.West) / (c.East - c.West) * 873;
+                Check("map: it shows 80 km top to bottom, keeps the map's shape, and puts home on the golden section, west of it the larger part",
+                      Math.Abs(c.KmTall - WeatherMap.ViewKm) < 0.5 && Math.Abs(c.KmWide / c.KmTall - 873 / 390.0) < 0.02 &&
+                      Math.Abs(homeX - 873 / CurtainPainter.Phi) < 1.5 && Math.Abs((c.North + c.South) / 2 - 45.0) < 1e-6);
+                GeoBox wide = WeatherMap.Crop(box, 45.0, -122.0, 3000, 100);
+                GeoBox edge = WeatherMap.Crop(box, 44.5, -123.45, 873, 390);
+                Check("map: it never reaches outside the pictures, even for a very wide map or a home near their edge",
+                      wide.West >= box.West - 1e-9 && wide.East <= box.East + 1e-9 && Math.Abs(wide.KmWide / wide.KmTall - 30) < 0.5 &&
+                      edge.West >= box.West - 1e-9 && edge.South >= box.South - 1e-9 && edge.East <= box.East && edge.North <= box.North);
+            }
+
+            // The replay: rests on the latest picture, then plays the hour and ends on the latest again.
+            {
+                int i, j;
+                float t, progress;
+                bool playing;
+                long play = WeatherMap.FadeMs + 7L * WeatherMap.StepMs, start = WeatherMap.CycleMs - play;
+                WeatherMap.LoopAt(8, 1000, out i, out j, out t, out progress, out playing);
+                bool rests = i == 7 && j == 7 && !playing;
+                WeatherMap.LoopAt(8, start + WeatherMap.FadeMs / 2, out i, out j, out t, out progress, out playing);
+                bool wraps = i == 7 && j == 0 && t > 0.3f && t < 0.7f && playing;
+                bool forward = true;
+                int lastI = 0;
+                for (long ms = start + WeatherMap.FadeMs; ms < WeatherMap.CycleMs; ms += 50)
+                {
+                    WeatherMap.LoopAt(8, ms, out i, out j, out t, out progress, out playing);
+                    if (i < lastI || j != i + 1 || !playing) forward = false;
+                    lastI = i;
+                }
+                WeatherMap.LoopAt(8, WeatherMap.CycleMs + 10, out i, out j, out t, out progress, out playing);
+                bool ends = i == 7 && !playing;
+                WeatherMap.LoopAt(1, start + 100, out i, out j, out t, out progress, out playing);
+                Check("map: the replay rests on the latest picture, plays the past hour in order, and ends on the latest",
+                      rests && wraps && forward && ends && i == 0 && !playing && play < WeatherMap.CycleMs / 4);
+            }
+
+            // The sun's height, for evening out the visible picture.
+            {
+                double ny = CurtainPainter.SunElevation(new DateTime(2026, 11, 15, 16, 40, 0, DateTimeKind.Utc), 40.7128, -74.0060);
+                double london = CurtainPainter.SunElevation(new DateTime(2026, 6, 21, 12, 2, 0, DateTimeKind.Utc), 51.5074, -0.1278);
+                double night = CurtainPainter.SunElevation(new DateTime(2026, 11, 15, 5, 0, 0, DateTimeKind.Utc), 40.7128, -74.0060);
+                Check("sun: its height at noon matches (New York in November about 31 degrees, London at midsummer about 62); below the horizon at night",
+                      Math.Abs(ny - 30.8) < 1.0 && Math.Abs(london - 61.9) < 1.0 && night < -30);
+            }
+
+            // Motion: the replay's cross-fades and the veil over the map while a PIN is typed run fast, then rest.
+            using (Bitmap canvas = new Bitmap(1280, 720))
+            using (Graphics g = Graphics.FromImage(canvas))
+            using (CurtainPainter p = new CurtainPainter())
+            {
+                Options po = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") };
+                DisplayState idle = CurtainPreview.Sample(po, "idle");
+                for (int k = 0; k <= 12; k++) { p.FixedNowMs = 1500 + k * 200; p.Paint(g, idle, 1280, 720); }   // also warms every picture
+                bool rest = !p.NeedsFastFrames;
+                long play = WeatherMap.FadeMs + 7L * WeatherMap.StepMs, start = WeatherMap.CycleMs - play;
+                p.FixedNowMs = start + WeatherMap.StepMs + WeatherMap.FadeMs + (WeatherMap.StepMs - WeatherMap.FadeMs) + WeatherMap.FadeMs / 2;
+                p.Paint(g, idle, 1280, 720);
+                bool fading = p.NeedsFastFrames;
+                p.FixedNowMs = WeatherMap.CycleMs + 2000;
+                p.Paint(g, idle, 1280, 720);
+                bool restsAgain = !p.NeedsFastFrames;
+                p.FixedNowMs = WeatherMap.CycleMs + 2100;
+                p.Paint(g, CurtainPreview.Sample(po, "typing"), 1280, 720);
+                bool veilMoves = p.NeedsFastFrames;
+                p.FixedNowMs = WeatherMap.CycleMs + 2100 + CurtainPainter.VeilMs + 400;
+                p.Paint(g, CurtainPreview.Sample(po, "typing"), 1280, 720);
+                bool veilDone = !p.NeedsFastFrames;
+                Check("motion: the map's replay cross-fades at frame rate and the screen rests between replays", rest && fading && restsAgain);
+                Check("motion: the map steps back while a PIN is typed, then the screen rests", veilMoves && veilDone);
+            }
+        }
+
+        private static void SaveSolid(string path, int w, int h, Func<int, int, Color> colour)
+        {
+            using (Bitmap b = new Bitmap(w, h, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+            {
+                for (int y = 0; y < h; y++) for (int x = 0; x < w; x++) b.SetPixel(x, y, colour(x, y));
+                b.Save(path, System.Drawing.Imaging.ImageFormat.Png);
+            }
         }
 
         private static void TestEnvironment()

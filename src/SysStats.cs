@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Net.NetworkInformation;
 using System.Text;
+using System.Threading;
 
 namespace ClaudeCurtain
 {
@@ -26,7 +27,16 @@ namespace ClaudeCurtain
 
         private readonly string weatherFile;
         private readonly string hourlyFile;
+        private readonly string mapDir;
         private DateTime hourlyStamp;
+        private DateTime mapStamp;
+        private long mapCheckedMs = -1;
+        private volatile WeatherMap map;
+        private bool mapLoading;
+        private readonly object mapGate = new object();
+
+        /// <summary>The radar and satellite map from local\map.txt (null when there is none). Re-read when it changes.</summary>
+        public WeatherMap Map { get { return map; } }
         private volatile HourPoint[] hourly = new HourPoint[0];
         private volatile string hourlyKey = "";
 
@@ -60,6 +70,7 @@ namespace ClaudeCurtain
         {
             weatherFile = string.IsNullOrEmpty(localDir) ? null : Path.Combine(localDir, "weather.txt");
             hourlyFile = string.IsNullOrEmpty(localDir) ? null : Path.Combine(localDir, "weather-hourly.txt");
+            mapDir = string.IsNullOrEmpty(localDir) ? null : localDir;
             string root = "C:\\";
             try { root = Path.GetPathRoot(Environment.GetFolderPath(Environment.SpecialFolder.System)); }
             catch { }
@@ -98,7 +109,45 @@ namespace ClaudeCurtain
             try { sysLine = BuildSystem(); } catch { }
             try { ReadWeather(); } catch { }
             try { ReadHourly(); } catch { }
+            try { ReadMap(); } catch { }
             try { Publish(); } catch { }
+        }
+
+        /// <summary>
+        /// Loads the map when map.txt changes, and once a minute drops pictures that have grown too old, in
+        /// case the script stopped refreshing them. Decoding the pictures takes a moment, so it runs on a
+        /// worker thread: this one also carries the PIN keys and the watchdog's heartbeat.
+        /// </summary>
+        private void ReadMap()
+        {
+            if (mapDir == null) return;
+            string index = Path.Combine(mapDir, WeatherMap.IndexName);
+            long nowMs = clock.ElapsedMilliseconds;
+            lock (mapGate)
+            {
+                if (mapLoading) return;   // a change during a load is picked up a second after it finishes
+                if (!File.Exists(index)) { map = null; mapStamp = DateTime.MinValue; return; }
+                DateTime stamp = File.GetLastWriteTimeUtc(index);
+                if (stamp != mapStamp)
+                {
+                    mapStamp = stamp;
+                    mapCheckedMs = nowMs;
+                    mapLoading = true;
+                    string dir = mapDir;
+                    ThreadPool.QueueUserWorkItem(delegate
+                    {
+                        WeatherMap loaded = null;
+                        try { loaded = WeatherMap.Load(dir, DateTime.UtcNow); }
+                        finally { lock (mapGate) { map = loaded; mapLoading = false; } }
+                    });
+                    return;
+                }
+                if (map != null && nowMs - mapCheckedMs >= 60000)
+                {
+                    mapCheckedMs = nowMs;
+                    map = map.Fresh(DateTime.UtcNow);
+                }
+            }
         }
 
         private void Publish()

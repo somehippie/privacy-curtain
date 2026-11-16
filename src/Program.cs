@@ -55,7 +55,7 @@ namespace ClaudeCurtain
         public int TestSecureOnMs;    // how long the simulated security screen stays open
         public string TestScreen;     // "WxH": lay the summary window out as if the primary monitor were this size
         public string PreviewFile;    // --render-preview: paint the curtain into this PNG instead of showing it
-        public string TestState;      // preview only: idle, typing, wrong, cooldown, admin, bright
+        public string TestState;      // preview only: idle, typing, wrong, cooldown, admin, bright, night; radar or clouds (the map's mode)
         public int PreviewSeconds;    // preview only: the drift position, as seconds since the curtain started
         public bool PreviewOverlay;   // preview only: draw the construction (grid, margins, type scale) on top
         public bool PreviewDrift;     // preview only: plot the drift path instead of the curtain

@@ -4,7 +4,7 @@ A black screen that covers every monitor and blocks the physical keyboard and mo
 (injected) clicks, typing and screenshots keep working underneath. It's for hiding an automated session on
 a machine you share a room with, without taking the machine away from yourself.
 
-![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone, the message "PC in use by Claude", and a data column with ten-minute CPU and network sparklines, memory and disk bars, then the forecast: humidity, wind, sunrise and sunset, the next six hours as a temperature curve over rain-chance bars, and three days](docs/curtain.png)
+![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone, a weather map below it showing a band of rain approaching a coast from the west, the message "PC in use by Claude", and a data column with ten-minute CPU and network sparklines, memory and disk bars, then the forecast: humidity, wind, sunrise and sunset, the next six hours as a temperature curve over rain-chance bars, and three days](docs/curtain.png)
 
 Awareness, not lockout: it counts and logs every blocked key press, click and escape attempt, can ping your
 phone while someone is at the keyboard, and shows a "While you were away" summary when you unlock. The
@@ -139,7 +139,7 @@ summary as text.
 screen; `curtain-on.ps1` and `curtain-status.ps1` print it.
 
 **How long logs are kept.** By size, not by date, so they can never grow past a fixed amount. All of
-them together stay under about 1.8 MB:
+them together stay under about 1.8 MB, and the weather map's pictures under another 0.3 MB:
 
 | File (in `local\`) | Cap | Roughly how much history |
 |---|---|---|
@@ -147,6 +147,7 @@ them together stay under about 1.8 MB:
 | `curtain.log` (diagnostics) | 512 KB, trimmed to the newest 128 KB | weeks |
 | `alerts.log` | 256 KB, trimmed to the newest 160 KB | thousands of alerts |
 | `last-summary.txt`, `last-summary-timeline.txt`, `last-exit.json`, `weather.txt`, `weather-hourly.txt` | one small file each, overwritten (the timeline holds at most 5,000 moments, about 60 KB) | the last run only |
+| `map.txt`, `map-base-*.png`, `radar-*.png`, `sat-*.jpg` (the weather map) | the last hour of pictures (about 8 radar, 7 satellite) and one land and water map; older pictures are deleted at each refresh | the last hour |
 | `test\report-*.txt` | the 10 newest are kept | the last 10 test runs |
 
 Your own unlock is not counted as someone at the keyboard. The key presses of the PIN entry that unlocked
@@ -182,8 +183,8 @@ about what it is doing. Everything on it comes from one proportional system buil
 
 ![The curtain with its construction drawn on top: the two columns in the ratio φ : 1, the margins above and below in the ratio 1 : φ, and each text size labelled as the clock size over a power of φ](docs/construction.png)
 
-- **Grid.** On a landscape screen the composition is two columns in the ratio φ : 1: the time and the
-  message on the left, live data on the right, a hairline between them. Both columns share a top edge
+- **Grid.** On a landscape screen the composition is two columns in the ratio φ : 1: the time, the
+  weather map and the message on the left, live data on the right, a hairline between them. Both columns share a top edge
   (the data column's first label sits level with the top of the digits) and a bottom edge (the message's
   last line sits level with the forecast's last line), so the clock heads the page, the message anchors
   it, and typed PIN dots appear in the open space between. On a portrait screen the data moves under the
@@ -207,6 +208,17 @@ about what it is doing. Everything on it comes from one proportional system buil
   (drawn on at least a 6° range, so a flat afternoon looks flat), and its chance of rain as a bar. Then
   three days. Rain is the one cool data hue, a muted steel blue. Weather symbols are drawn in code (sun,
   moon, cloud, partly cloudy, rain, storm, snow, fog, wind).
+- **The weather map.** Under the date, as wide as the clock, with a header ruled like the data column's
+  sections ("RADAR · PAST HOUR", the picture's time at the right). On a landscape screen the data column
+  decides where the message sits, so the map fills space that was empty and moves nothing else. It shows
+  80 km top to bottom, with home as a small accent-coloured dot halfway down and on the golden section
+  across, so the larger part of the map lies to the west, where weather usually comes from. It is drawn
+  in the curtain's own palette rather than the services' colours: water a shade lighter than the black
+  land, the shoreline a fine line drawn over the weather so the coast stays readable under fog, rain in
+  the data hue from quiet to bright as it gets heavier (amber when heavy, coral when severe, with a
+  five-step legend), clouds and fog in warm white, never brighter than the body text, so the clock stays
+  the brightest thing on screen. The PIN row shares the map's lowest band: while a PIN is typed the map
+  fades to black, and it comes back when the row clears.
 - **Colour.** Warm neutrals in four text tones and one accent, the short terracotta rule. The self-tests
   compute each tone's contrast on black: every text tone meets WCAG AA (the faintest labels are 4.9 : 1)
   and body text and values meet AAA (7.7 : 1). Overnight (10:30 PM to 6:30 AM, with hour-long ramps) the
@@ -215,7 +227,9 @@ about what it is doing. Everything on it comes from one proportional system buil
   (about 30 to 50 ms), and moved as one rigid piece a whole pixel at a time, so lines never shimmer
   against each other. It fades in when the curtain rises and cross-fades when the minute turns. The
   accent rule breathes slowly while the curtain is up, a quiet sign that the PC is at work. Typed PIN dots
-  ease in, and a wrong PIN shakes them before they fade and the note appears. The screen repaints at about
+  ease in, and a wrong PIN shakes them before they fade and the note appears. Every 30 seconds the map
+  replays its past hour in about five seconds, each picture cross-fading into the next, while a short
+  mark runs along its header's rule; then it rests on the latest picture. The screen repaints at about
   60 frames a second only while one of these short animations plays, and five times a second otherwise.
 - **Drift.** Against burn-in, the composition wanders within 5% of its resting point: one sweep across
   every 5 minutes and one sweep down every 5 × φ ≈ 8.1 minutes. Because φ is irrational the path never
@@ -233,8 +247,10 @@ preview mode:
 .\bin\ClaudeCurtain.exe --render-drift "$env:TEMP\drift.png"
 ```
 
-`--test-state` is one of idle, typing, wrong, shake, cooldown, admin, bright, night, summary;
-`--preview-seconds N` shows the drift position N seconds in.
+`--test-state` is one of idle, typing, wrong, shake, cooldown, admin, bright, night, summary, or radar or
+clouds to force the map's mode; `--preview-seconds N` shows the drift position N seconds in. With
+`--local-dir` pointing at a folder that has a `map.txt`, the preview uses that real map; otherwise it draws
+a made-up sample place (a coast, a river and a lake), which is what the images here show.
 
 ## On-screen info
 
@@ -267,6 +283,26 @@ The data column:
   best-effort: a lost network shows no forecast rather than an error, and anything older than a day is
   dropped. The User-Agent sent to NWS is a generic client name. Weather Underground's forecast API now needs
   a paid key, so it is not the default; `config.json` has a `wuApiKey` slot for where one would go.
+
+And in the left column:
+
+- **The weather map.** Radar when rain is near, clouds and fog otherwise. *Radar* shows when the next three
+  hours of the hourly forecast have a 30% chance of rain or more, or rain, showers, storms or snow in their
+  words, or when the radar shows at least light rain (20 dBZ) within 50 km. The source is NOAA's MRMS
+  mosaic through NOAA nowCOAST: every radar that covers the area blended at 1 km and cleaned of ground
+  clutter, new about every 4 minutes. The curtain reads the exact rain rate (dBZ) back out of NOAA's
+  colours (a self-test round-trips every value) and draws it in its own. *Clouds* are NOAA's GOES
+  satellite pictures through nowCOAST, every 5 minutes: visible by day (half-kilometre detail, enough to
+  watch coastal fog move; evened out when the sun is low), infrared at night (it shows cloud, but fog and
+  low stratus are close to the ground's temperature, so they barely show at night). Land and water come
+  from NASA GIBS's map made from OpenStreetMap, fetched once (map data © OpenStreetMap contributors).
+
+  `curtain-weather.ps1` fetches the pictures into `local\` alongside the forecast (`map.txt` lists them)
+  and, in the background, refreshes them every 5 minutes (`-MapMinutes`), keeping only the last hour.
+  Requests carry a box of 1.2 × 3 degrees around the forecast grid, rounded to a tenth of a degree (about
+  10 km), so the servers learn the area, never the address; no key, no account. Pictures more than three
+  hours old are never shown, and with no map files at all the curtain looks exactly as it did before the
+  map. `-NoMap` leaves it out. Like the forecast, it covers the United States.
 
 Everything here is read-only and isolated: a failed reading shows `--`, and nothing in it can hold up the
 curtain or a shutdown.
@@ -304,12 +340,15 @@ Please read these before relying on the curtain.
 ```
 
 They use a throwaway PIN in `local\test` and never touch the real one, and they never call your notify
-hook. The self-tests (~92 checks, including PIN hashing/entry rules, which key presses belong to your own
+hook. The self-tests (~111 checks, including PIN hashing/entry rules, which key presses belong to your own
 unlock, the time-zone label, the stats sampler, weather-file reading, and the design: every state rendered
 at 720p, 1080p, 16:10, 1440p, ultrawide and portrait, fitting the screen, the columns exactly φ : 1,
 staying on screen through 8 hours of drift, a fixed frame whatever the readings, the hourly forecast file,
 sunrise and sunset against published times, every text tone's WCAG contrast, and the animations starting
-and settling) and the full lifecycle suite (100+ checks: a screenshot seeing the
+and settling; and the weather map: its place in the layout, every radar colour read back as its dBZ, the
+map file and its pictures, stale and missing pictures, radar or clouds, which part of the area shows, the
+replay's timing, the sun's height, and the replay and the PIN veil letting the screen rest) and the full
+lifecycle suite (100+ checks: a screenshot seeing the
 desktop through the curtain, injected clicks and typing passing through, simulated shutdown, every hang
 being recovered, the keep-awake request appearing with the curtain and vanishing with it, the alerts, the
 re-assert, the event log/summary, and the summary window laid out at 720p, 1080p and 1440p with nothing
@@ -327,13 +366,15 @@ runs.
   (ignored).
 - `scripts/` — the PowerShell entry points (on, off, launch, set-pin, status, log, weather, build, test).
 - `tests/` — the test helper used by `test-curtain.ps1`.
-- `local/` (ignored) — the PIN hash, logs, run state, and the cached forecast.
+- `local/` (ignored) — the PIN hash, logs, run state, the cached forecast and the weather map's pictures.
 
 ## Colophon
 
 Set in Bahnschrift (Microsoft, after DIN 1451). Grid, type scale, margins and drift all derive from the
 golden ratio. Drawn with GDI+ from the C# compiler inside Windows, with no external assets: the weather
-symbols, sparklines and bars are all code. Designed, built and tested with
+symbols, sparklines and bars are all code, and the map is drawn pixel by pixel from NOAA's radar and
+satellite numbers over a land and water map from NASA GIBS (© OpenStreetMap contributors). Designed,
+built and tested with
 [Claude Code](https://claude.com/claude-code).
 
 ## License

@@ -15,7 +15,8 @@ namespace ClaudeCurtain
     /// from screen capture by design, so this is how its design is reviewed and documented. Sample data is
     /// fixed so renders are comparable; the forecast is the real local\weather.txt when there is one.
     ///
-    ///   --test-state idle|typing|wrong|shake|cooldown|admin|bright|night   which moment to show
+    ///   --test-state idle|typing|wrong|shake|cooldown|admin|bright|night   which moment to show;
+    ///                       radar|clouds   the map in that mode whatever the weather says
     ///   --overlay           draw the construction on top: the φ : 1 columns, the golden-section margins
     ///                       and the type scale
     ///   --render-drift PNG  instead, plot two hours of the drift path
@@ -136,6 +137,20 @@ namespace ClaudeCurtain
             s.Lat = 45.0;     // a neutral sample place in the Pacific time zone, not anyone's home
             s.Lon = -122.0;
 
+            // The map: the real one when local\ has it (and then the real place, for home on it), else a made-up sample.
+            WeatherMap real = o.LocalDir != null ? WeatherMap.Load(o.LocalDir, DateTime.UtcNow) : null;
+            if (real != null)
+            {
+                double la, lo;
+                string hourly = Path.Combine(o.LocalDir, "weather-hourly.txt");
+                try { if (File.Exists(hourly) && SysStats.ParseLocation(File.ReadAllLines(hourly, Encoding.UTF8), out la, out lo)) { s.Lat = la; s.Lon = lo; } } catch { }
+                s.Map = real;
+            }
+            else
+            {
+                s.Map = WeatherMap.Sample(s.Lat, s.Lon, now.ToUniversalTime());
+            }
+
             string wx = Path.Combine(o.LocalDir ?? "", "weather.txt");
             string[] lines = null;
             try { if (o.LocalDir != null && File.Exists(wx)) lines = File.ReadAllLines(wx, Encoding.UTF8); } catch { }
@@ -159,6 +174,8 @@ namespace ClaudeCurtain
                 case "admin": s.AdminNotice = true; break;
                 case "bright": s.Bright = true; break;
                 case "night": s.NightDim = CurtainPainter.NightLevel; break;
+                case "radar": s.MapMode = 1; break;
+                case "clouds": s.MapMode = 2; break;
             }
             return s;
         }

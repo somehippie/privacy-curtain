@@ -38,7 +38,9 @@ namespace ClaudeCurtain
         public HourPoint[] Hourly = new HourPoint[0];   // the coming hours of the forecast
         public string HourlyKey = "";    // changes when a new hourly forecast is read
         public DateTime Now = DateTime.Now;              // local time of this state (which hour is "now")
-        public double Lat = double.NaN, Lon = double.NaN;   // where the forecast is for (sunrise and sunset)
+        public double Lat = double.NaN, Lon = double.NaN;   // where the forecast is for (sunrise and sunset, home on the map)
+        public WeatherMap Map;           // radar and satellite pictures (null = no map)
+        public int MapMode;              // 0 = radar or clouds as the weather decides; 1 = radar; 2 = clouds (previews)
 
         /// <summary>Everything that changes what is drawn, apart from where it sits (the drift).</summary>
         public string ContentKey()
@@ -48,6 +50,7 @@ namespace ClaudeCurtain
                    Cpu + "|" + Ram + "|" + Net + "|" + Uptime + "|" + Disk + "|" +
                    (Sys == null ? "-" : Sys.Version.ToString(CultureInfo.InvariantCulture)) + "|" +
                    NightDim.ToString("0.00", CultureInfo.InvariantCulture) + "|" + HourlyKey + "|" +
+                   (Map == null ? "" : Map.Key) + "|" + MapMode + "|" +
                    (Weather == null ? "" : string.Join("¦", Weather));
         }
 
@@ -507,6 +510,7 @@ namespace ClaudeCurtain
                 s.HourlyKey = stats.HourlyKey;
                 s.Lat = stats.Latitude;
                 s.Lon = stats.Longitude;
+                s.Map = stats.Map;
             }
 
             string key = s.Key();
