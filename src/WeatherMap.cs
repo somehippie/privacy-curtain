@@ -108,7 +108,8 @@ namespace ClaudeCurtain
     {
         public const string IndexName = "map.txt";
         public const double KmPerDegree = 111.2;
-        public const double ViewKm = 120;         // how much of the area the map shows, top to bottom
+        public const double ViewKm = 135;         // how much of the area the map shows, top to bottom
+        public const double SouthShare = 0.3;     // how much of it lies south of home: 7/10 of the map is north of it
         public const double StaleHours = 3;       // older pictures are never shown
         public const int RainDbz = 20;            // light rain on the radar
         public const int RainChance = 30;         // % chance in the next three hours that makes the map show radar
@@ -727,8 +728,9 @@ namespace ClaudeCurtain
 
         /// <summary>
         /// The part of the box a w x h map shows: ViewKm tall (less if the box is too small for the shape),
-        /// home on the golden section both ways, so the larger parts lie to the west, where the weather mostly
-        /// comes from, and to the north. Slid inward where home is too near the box's edge.
+        /// home on the golden section across, so the larger part lies to the west, where the weather mostly
+        /// comes from, and 7/10 of the way down, so most of the map lies to the north. Slid inward where home
+        /// is too near the box's edge.
         /// </summary>
         internal static GeoBox Crop(GeoBox box, double lat, double lon, int w, int h)
         {
@@ -742,7 +744,7 @@ namespace ClaudeCurtain
             double dLat = hk / KmPerDegree, dLon = wk / kmLon;
             double cLat = double.IsNaN(lat) ? midLat : lat, cLon = double.IsNaN(lon) ? (box.West + box.East) / 2 : lon;
             double westShare = double.IsNaN(lon) ? 0.5 : 1 / CurtainPainter.Phi;
-            double southShare = double.IsNaN(lat) ? 0.5 : 1 - 1 / CurtainPainter.Phi;
+            double southShare = double.IsNaN(lat) ? 0.5 : SouthShare;
             double s = Math.Max(box.South, Math.Min(box.North - dLat, cLat - dLat * southShare));
             double we = Math.Max(box.West, Math.Min(box.East - dLon, cLon - dLon * westShare));
             return new GeoBox(s, we, s + dLat, we + dLon);
@@ -750,23 +752,29 @@ namespace ClaudeCurtain
 
         // ------------------------------------------------------------------ the replay
 
-        public const int CycleMs = 30000;   // the past hour replays once every 30 s...
-        public const int StepMs = 700;      // ...a picture every 0.7 s...
-        public const int FadeMs = 250;      // ...each cross-fading into the next; the rest of the time it rests on the latest
+        public const int StepMs = 700;      // the past hour plays on a loop: a picture every 0.7 s...
+        public const int FadeMs = 250;      // ...each cross-fading into the next...
+        public const int HoldMs = 1400;     // ...and the latest held two steps before the hour plays again
+
+        /// <summary>One turn of the loop for count pictures: the hold on the latest, then the hour played through.</summary>
+        internal static long CycleFor(int count)
+        {
+            return count < 2 ? 0 : HoldMs + FadeMs + (long)(count - 1) * StepMs;
+        }
 
         /// <summary>
-        /// Which pictures show at a moment: picture i fading into j by fade (0..1). The replay runs at the end of
-        /// each cycle and finishes on the latest picture, which then rests until the next cycle. progress runs
-        /// 0..1 through the replay.
+        /// Which pictures show at a moment: picture i fading into j by fade (0..1). Each turn of the loop holds the
+        /// latest picture briefly, then plays the past hour from the oldest and finishes on the latest again (until
+        /// 2026-11-17 it rested there for most of a 30 s cycle). progress runs 0..1 through the hour.
         /// </summary>
         internal static void LoopAt(int count, long ms, out int i, out int j, out float fade, out float progress, out bool playing)
         {
             i = j = Math.Max(0, count - 1);
             fade = 0; progress = 1; playing = false;
             if (count < 2) return;
-            long play = FadeMs + (long)(count - 1) * StepMs;
-            long p = ((ms % CycleMs) + CycleMs) % CycleMs;
-            long start = CycleMs - play;
+            long cycle = CycleFor(count);
+            long p = ((ms % cycle) + cycle) % cycle;
+            long start = HoldMs;
             if (p < start) return;
             playing = true;
             long q = p - start;

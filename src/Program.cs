@@ -27,7 +27,7 @@ namespace ClaudeCurtain
         public const int HookThreadHung = 13;
     }
 
-    internal enum Mode { None, Run, Watchdog, SetPin, SelfTest, Diag, Elevated, Summary, Preview }
+    internal enum Mode { None, Run, Watchdog, SetPin, SelfTest, Diag, Elevated, Summary, Preview, Launch }
 
     internal sealed class Options
     {
@@ -39,6 +39,7 @@ namespace ClaudeCurtain
         public string LocalDir;
         public string PinFile;
         public string OutFile;
+        public string LaunchFile;     // --ask-launch: the launcher's request, and later its answer (see LaunchView)
         public string Error;
 
         // watchdog mode
@@ -112,6 +113,7 @@ namespace ClaudeCurtain
                         case "--diag": o.Mode = Mode.Diag; break;
                         case "--list-elevated": o.Mode = Mode.Elevated; break;
                         case "--show-summary": o.Mode = Mode.Summary; break;
+                        case "--ask-launch": o.LaunchFile = Next(args, ref i); break;
                         case "--pid": o.ParentPid = int.Parse(Next(args, ref i), CultureInfo.InvariantCulture); break;
                         case "--beat": o.BeatName = Next(args, ref i); break;
                         case "--local-dir": o.LocalDir = Next(args, ref i); break;
@@ -136,6 +138,7 @@ namespace ClaudeCurtain
                 }
                 o.LocalDir = Path.GetFullPath(o.LocalDir).TrimEnd('\\');
                 if (o.PinFile == null) o.PinFile = Path.Combine(o.LocalDir, "pin.hash");
+                if (o.LaunchFile != null) o.Mode = Mode.Launch;   // with --render-preview, the dialog is drawn instead of shown
             }
             catch (Exception ex)
             {
@@ -211,6 +214,8 @@ namespace ClaudeCurtain
                         return SummaryView.Run(o);
                     case Mode.Preview:
                         return CurtainPreview.Run(o);
+                    case Mode.Launch:
+                        return LaunchView.Run(o);
                 }
                 return ExitCode.Usage;
             }

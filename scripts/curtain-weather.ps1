@@ -198,8 +198,9 @@ function Update-Forecast {
 # All keyless. The requests carry a box rounded to a tenth of a degree around the forecast grid, so the
 # servers learn the area, never the address. The curtain reads the pictures from local\ (map.txt lists them).
 $nowcoast = 'https://nowcoast.noaa.gov/geoserver'
-$mapHalfLat = 0.8     # the box: 1.6 x 3 degrees (about 180 x 255 km at 40 degrees north), more than the curtain shows;
-$mapHalfLon = 1.5     # whole tenths only, since map.txt gives the box to one decimal
+$mapNorth = 1.0       # the box: from 0.6 degrees south of the grid to 1.0 north (the curtain shows more of the north)
+$mapSouth = 0.6       # and 1.7 either side, 1.6 x 3.4 degrees (about 180 x 300 km at 37 degrees north), more than the
+$mapHalfLon = 1.7     # curtain shows; whole tenths only, since map.txt gives the box to one decimal
 $mapFile = Join-Path $LocalDir 'map.txt'
 $mapNamePattern = '^(radar|sat-vis|sat-ir)-\d{8}T\d{6}Z\.(png|jpg)$'
 
@@ -426,10 +427,10 @@ function Update-Map {
     if (-not $center) { Write-Host 'Map skipped: no location yet (it comes with the hourly forecast).'; return }
     $cLat = [Math]::Round($center[0], 1)
     $cLon = [Math]::Round($center[1], 1)
-    [double[]]$box = @(($cLat - $mapHalfLat), ($cLon - $mapHalfLon), ($cLat + $mapHalfLat), ($cLon + $mapHalfLon))
+    [double[]]$box = @(($cLat - $mapSouth), ($cLon - $mapHalfLon), ($cLat + $mapNorth), ($cLon + $mapHalfLon))
     $boxText = ($box | ForEach-Object { $_.ToString('0.0', $inv) }) -join ' '
     $lonSpan = 2 * $mapHalfLon
-    $latSpan = 2 * $mapHalfLat
+    $latSpan = $mapNorth + $mapSouth
 
     # Land and water, once per place.
     $baseName = 'map-base-{0}.png' -f (($box | ForEach-Object { $_.ToString('0.0', $inv) }) -join '_')
@@ -442,6 +443,9 @@ function Update-Map {
             return
         }
         Get-ChildItem -Path $LocalDir -Filter 'map-base-*.png' | Where-Object { $_.Name -ne $baseName } | Remove-Item -Force -ErrorAction SilentlyContinue
+        # A new box (a new place, or a new shape): radar and cloud pictures cut for the old one would sit in the
+        # wrong place, and they are kept by time alone, so they all go and are fetched again for this box.
+        Get-ChildItem -Path $LocalDir -File | Where-Object { $_.Name -match $mapNamePattern } | Remove-Item -Force -ErrorAction SilentlyContinue
     }
 
     # Elevation for the relief, once per place.

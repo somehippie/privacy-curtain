@@ -57,10 +57,11 @@ $common = @('/nologo', '/optimize+', '/warn:4', '/platform:anycpu',
 # ---- the curtain ----
 $exe = Join-Path $bin 'ClaudeCurtain.exe'
 $manifest = Join-Path $srcDir 'app.manifest'
+$icon = Join-Path $srcDir 'curtain.ico'   # drawn by make-icon.ps1
 $sources = @(Get-ChildItem $srcDir -Filter *.cs)
-$inputs = $sources + (Get-Item $manifest) + (Get-Item $PSCommandPath)
+$inputs = $sources + (Get-Item $manifest) + (Get-Item $icon) + (Get-Item $PSCommandPath)
 if ($Force -or -not (Test-UpToDate $exe $inputs)) {
-    Invoke-Csc $exe ($common + @('/target:winexe', "/win32manifest:$manifest") + $sources.FullName)
+    Invoke-Csc $exe ($common + @('/target:winexe', "/win32manifest:$manifest", "/win32icon:$icon") + $sources.FullName)
     Write-Host "Built $exe"
 } else {
     Write-Verbose 'ClaudeCurtain.exe is up to date.'

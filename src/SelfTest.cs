@@ -333,7 +333,7 @@ namespace ClaudeCurtain
                     {
                         slowestMs = Math.Max(slowestMs, sw.ElapsedMilliseconds);
                         Bitmap b = l == null ? null : l.Block;
-                        if (b == null || b.Width > scr.Width * 0.9 + 1 || b.Height > scr.Height * 0.9 + 1)
+                        if (b == null || b.Width > scr.Width * CurtainPainter.MaxWidthShare + 1 || b.Height > scr.Height * CurtainPainter.MaxHeightShare + 1)
                         {
                             allFit = false;
                             worst = state + " at " + scr.Width + "x" + scr.Height;
@@ -531,9 +531,9 @@ namespace ClaudeCurtain
                 p.FixedNowMs = 0;
                 p.Paint(g, CurtainPreview.Sample(po, "idle"), 1280, 720);
                 bool fadeFast = p.NeedsFastFrames;
-                p.FixedNowMs = 1500;
+                p.FixedNowMs = WeatherMap.HoldMs - 100;   // after the fade-in, while the map's loop holds its latest picture
                 p.Paint(g, CurtainPreview.Sample(po, "idle"), 1280, 720);
-                bool settled = !p.NeedsFastFrames;
+                bool settled = !p.NeedsFastFrames && CurtainPainter.FadeInMs < WeatherMap.HoldMs - 100;
                 p.FixedNowMs = 2000;
                 p.Paint(g, CurtainPreview.Sample(po, "typing"), 1280, 720);
                 bool dotsFast = p.NeedsFastFrames;
@@ -545,6 +545,50 @@ namespace ClaudeCurtain
                 bool shakeDone = !p.NeedsFastFrames;
                 Check("motion: the fade-in runs at frame rate, then the screen goes back to its slow tick", fadeFast && settled);
                 Check("motion: typed PIN dots and a wrong-PIN shake animate, then settle", dotsFast && shakeFast && shakeDone);
+            }
+
+            // The launcher's dialog: it fits, its parts never overlap, and the hours stay a whole number from 1 to 24.
+            {
+                bool fits = true, apart = true;
+                string dialogWorst = "";
+                string longNote = "Claude Code is open here, in a folder with a rather long name (since Sat 11:44 PM), but without Remote Control. You can type /remote-control in it and turn this off instead.";
+                foreach (Size scr in new[] { new Size(1280, 720), new Size(1920, 1080), new Size(2560, 1440), new Size(3840, 2160), new Size(1080, 1920) })
+                    using (LaunchView v = new LaunchView(24, "on", longNote, scr))
+                    {
+                        Size cs = v.ClientSize;
+                        if (cs.Width > scr.Width * 0.9 || cs.Height > scr.Height * 0.9) { fits = false; dialogWorst = scr.Width + "x" + scr.Height + ": " + cs.Width + "x" + cs.Height; }
+                        List<RectangleF> parts = new List<RectangleF>(v.Parts());
+                        for (int pa = 0; pa < parts.Count; pa++)
+                        {
+                            RectangleF r = parts[pa];
+                            if (r.Left < 0 || r.Top < 0 || r.Right > cs.Width || r.Bottom > cs.Height) { apart = false; dialogWorst = scr.Width + "x" + scr.Height + ": part " + pa + " outside"; }
+                            for (int pb = pa + 1; pb < parts.Count; pb++)
+                                if (r.IntersectsWith(parts[pb])) { apart = false; dialogWorst = scr.Width + "x" + scr.Height + ": parts " + pa + " and " + pb; }
+                        }
+                    }
+                Check("launcher: the dialog fits screens from 720p to 4K and portrait, and none of its parts overlap" + (fits && apart ? "" : " (" + dialogWorst + ")"), fits && apart);
+
+                bool typing, offline;
+                using (LaunchView v = new LaunchView(24, "off", "", new Size(2560, 1440)))
+                {
+                    v.TypeDigit(1); v.TypeDigit(2); bool twelve = v.Hours == 12;
+                    v.TypeDigit(3); bool restarts = v.Hours == 3;    // 123 is too many: a new figure starts
+                    v.TypeDigit(0); bool refused = v.Hours == 0;     // nor is 30: the figure waits for a valid one
+                    v.TypeDigit(8); bool eight = v.Hours == 8;
+                    v.Backspace(); bool empty = v.Hours == 0;
+                    v.Step(-1); bool floor = v.Hours == 1;
+                    for (int k = 0; k < 30; k++) v.Step(1);
+                    bool ceiling = v.Hours == LaunchView.MaxHours;
+                    v.Flip();
+                    typing = twelve && restarts && refused && eight && empty && floor && ceiling && v.Remote;
+                }
+                using (LaunchView v = new LaunchView(8, "unavailable", "", new Size(2560, 1440)))
+                {
+                    v.Flip();
+                    offline = !v.Remote && !v.RemoteAvailable && v.Hours == 8;
+                }
+                Check("launcher: digits build the hours (1 then 2 is 12; a third starts again), the steps stay within 1 to 24, and the switch is off for good without Claude Code",
+                      typing && offline);
             }
 
             Point a = CurtainPainter.Place(1000, 800, 2560, 1440, 0);
@@ -663,12 +707,12 @@ namespace ClaudeCurtain
 
             // Which part of the area shows.
             {
-                GeoBox box = new GeoBox(44.4, -123.5, 45.6, -120.5), roomy = new GeoBox(44.2, -124.2, 45.8, -119.8);
-                GeoBox c = WeatherMap.Crop(roomy, 45.0, -122.0, 873, 536);
-                double homeX = (-122.0 - c.West) / (c.East - c.West) * 873, homeY = (c.North - 45.0) / (c.North - c.South) * 536;
-                Check("map: it shows 120 km top to bottom, keeps the map's shape, and puts home on the golden section both ways, the larger parts west and north of it",
-                      WeatherMap.ViewKm == 120 && Math.Abs(c.KmTall - WeatherMap.ViewKm) < 0.5 && Math.Abs(c.KmWide / c.KmTall - 873 / 536.0) < 0.02 &&
-                      Math.Abs(homeX - 873 / CurtainPainter.Phi) < 1.5 && Math.Abs(homeY - 536 / CurtainPainter.Phi) < 1.5);
+                GeoBox box = new GeoBox(44.4, -123.5, 45.6, -120.5), roomy = new GeoBox(44.2, -124.2, 46.2, -119.8);
+                GeoBox c = WeatherMap.Crop(roomy, 45.0, -122.0, 969, 599);
+                double homeX = (-122.0 - c.West) / (c.East - c.West) * 969, homeY = (c.North - 45.0) / (c.North - c.South) * 599;
+                Check("map: it shows 135 km top to bottom, keeps the map's shape, puts home on the golden section across (the larger part west) and 7/10 of the way down",
+                      WeatherMap.ViewKm == 135 && Math.Abs(c.KmTall - WeatherMap.ViewKm) < 0.5 && Math.Abs(c.KmWide / c.KmTall - 969 / 599.0) < 0.02 &&
+                      Math.Abs(homeX - 969 / CurtainPainter.Phi) < 1.5 && Math.Abs(homeY - 599 * (1 - WeatherMap.SouthShare)) < 1.5);
                 GeoBox wide = WeatherMap.Crop(box, 45.0, -122.0, 3000, 100);
                 GeoBox edge = WeatherMap.Crop(box, 44.5, -123.45, 873, 390);
                 Check("map: it never reaches outside the pictures, even for a very wide map or a home near their edge",
@@ -676,29 +720,29 @@ namespace ClaudeCurtain
                       edge.West >= box.West - 1e-9 && edge.South >= box.South - 1e-9 && edge.East <= box.East && edge.North <= box.North);
             }
 
-            // The replay: rests on the latest picture, then plays the hour and ends on the latest again.
+            // The replay: a loop that holds the latest picture briefly, plays the hour in order, ends on the latest.
             {
                 int i, j;
                 float t, progress;
                 bool playing;
-                long play = WeatherMap.FadeMs + 7L * WeatherMap.StepMs, start = WeatherMap.CycleMs - play;
-                WeatherMap.LoopAt(8, 1000, out i, out j, out t, out progress, out playing);
+                long cycle = WeatherMap.CycleFor(8), start = WeatherMap.HoldMs;
+                WeatherMap.LoopAt(8, WeatherMap.HoldMs / 2, out i, out j, out t, out progress, out playing);
                 bool rests = i == 7 && j == 7 && !playing;
                 WeatherMap.LoopAt(8, start + WeatherMap.FadeMs / 2, out i, out j, out t, out progress, out playing);
                 bool wraps = i == 7 && j == 0 && t > 0.3f && t < 0.7f && playing;
                 bool forward = true;
                 int lastI = 0;
-                for (long ms = start + WeatherMap.FadeMs; ms < WeatherMap.CycleMs; ms += 50)
+                for (long ms = start + WeatherMap.FadeMs; ms < cycle; ms += 50)
                 {
                     WeatherMap.LoopAt(8, ms, out i, out j, out t, out progress, out playing);
                     if (i < lastI || j != i + 1 || !playing) forward = false;
                     lastI = i;
                 }
-                WeatherMap.LoopAt(8, WeatherMap.CycleMs + 10, out i, out j, out t, out progress, out playing);
+                WeatherMap.LoopAt(8, cycle + 10, out i, out j, out t, out progress, out playing);
                 bool ends = i == 7 && !playing;
                 WeatherMap.LoopAt(1, start + 100, out i, out j, out t, out progress, out playing);
-                Check("map: the replay rests on the latest picture, plays the past hour in order, and ends on the latest",
-                      rests && wraps && forward && ends && i == 0 && !playing && play < WeatherMap.CycleMs / 4);
+                Check("map: the replay loops: it plays the past hour in order, ends on the latest, holds it two steps and plays again",
+                      rests && wraps && forward && ends && i == 0 && !playing && WeatherMap.HoldMs <= 2 * WeatherMap.StepMs && cycle < 8000);
             }
 
             // The sun's height, for evening out the visible picture.
@@ -717,22 +761,22 @@ namespace ClaudeCurtain
             {
                 Options po = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") };
                 DisplayState idle = CurtainPreview.Sample(po, "idle");
-                for (int k = 0; k <= 12; k++) { p.FixedNowMs = 1500 + k * 200; p.Paint(g, idle, 1280, 720); }   // also warms every picture
+                long cycle = WeatherMap.CycleFor(8), turn = 3 * cycle;   // a few turns in, so the picture count settles
+                for (int k = 0; k <= 12; k++) { p.FixedNowMs = turn + k * 100; p.Paint(g, idle, 1280, 720); }   // in the hold; also warms every picture
                 bool rest = !p.NeedsFastFrames;
-                long play = WeatherMap.FadeMs + 7L * WeatherMap.StepMs, start = WeatherMap.CycleMs - play;
-                p.FixedNowMs = start + WeatherMap.StepMs + WeatherMap.FadeMs + (WeatherMap.StepMs - WeatherMap.FadeMs) + WeatherMap.FadeMs / 2;
+                p.FixedNowMs = turn + WeatherMap.HoldMs + WeatherMap.StepMs + WeatherMap.FadeMs + (WeatherMap.StepMs - WeatherMap.FadeMs) + WeatherMap.FadeMs / 2;
                 p.Paint(g, idle, 1280, 720);
                 bool fading = p.NeedsFastFrames;
-                p.FixedNowMs = WeatherMap.CycleMs + 2000;
+                p.FixedNowMs = turn + cycle + WeatherMap.HoldMs / 2;
                 p.Paint(g, idle, 1280, 720);
                 bool restsAgain = !p.NeedsFastFrames;
-                p.FixedNowMs = WeatherMap.CycleMs + 2100;
+                p.FixedNowMs = turn + cycle + WeatherMap.HoldMs / 2 + 100;
                 p.Paint(g, CurtainPreview.Sample(po, "typing"), 1280, 720);
                 bool veilMoves = p.NeedsFastFrames;
-                p.FixedNowMs = WeatherMap.CycleMs + 2100 + CurtainPainter.VeilMs + 400;
+                p.FixedNowMs = turn + cycle + WeatherMap.HoldMs / 2 + 100 + CurtainPainter.VeilMs + 400;   // the loop plays on, unseen
                 p.Paint(g, CurtainPreview.Sample(po, "typing"), 1280, 720);
                 bool veilDone = !p.NeedsFastFrames;
-                Check("motion: the map's replay cross-fades at frame rate and the screen rests between replays", rest && fading && restsAgain);
+                Check("motion: the map's replay cross-fades at frame rate and the screen rests in the hold on the latest picture", rest && fading && restsAgain);
                 Check("motion: the map steps back while a PIN is typed, then the screen rests", veilMoves && veilDone);
             }
 

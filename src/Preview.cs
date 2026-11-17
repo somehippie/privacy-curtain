@@ -17,7 +17,8 @@ namespace ClaudeCurtain
     /// with a real map (local\map.txt) the time and the next hours are real too.
     ///
     ///   --test-state idle|typing|wrong|shake|cooldown|admin|bright|night   which moment to show;
-    ///                       radar|clouds   the map in that mode whatever the weather says
+    ///                       radar|clouds   the map in that mode whatever the weather says;
+    ///                       summary|launch   instead, the "While you were away" window or the launcher's dialog
     ///   --hide-home         leave home off the map, for a picture to share
     ///   --overlay           draw the construction on top: the φ : 1 columns, the golden-section margins
     ///                       and the type scale
@@ -39,6 +40,11 @@ namespace ClaudeCurtain
             if (string.Equals(o.TestState, "summary", StringComparison.OrdinalIgnoreCase))
             {
                 RenderSummary(o.PreviewFile, w, h);
+                return ExitCode.Ok;
+            }
+            if (string.Equals(o.TestState, "launch", StringComparison.OrdinalIgnoreCase))
+            {
+                LaunchView.RenderSample(o.PreviewFile, w, h);   // the launcher's dialog, for a sample launch
                 return ExitCode.Ok;
             }
             using (Bitmap bmp = new Bitmap(w, h, PixelFormat.Format32bppArgb))

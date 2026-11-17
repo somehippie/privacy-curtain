@@ -146,7 +146,7 @@ function Format-ClaudeSession($Session) {
 }
 
 function Get-RemoteControlAdvice($Sessions, [bool]$ClaudeFound) {
-    # What the launcher's "Open Claude Code with Remote Control" box starts as, and the line under it. Ticked
+    # What the launcher's "Open Claude Code with Remote Control" switch starts as, and the line under it. On
     # unless a Claude Code session here already has Remote Control on.
     $on = @($Sessions | Where-Object { $_.RemoteControl })
     $off = @($Sessions | Where-Object { -not $_.RemoteControl })
@@ -166,7 +166,7 @@ function Get-RemoteControlAdvice($Sessions, [bool]$ClaudeFound) {
     }
     if ($off.Count -gt 0) {
         return [pscustomobject]@{ Check = $true; Enabled = $true
-                                  Note = "Claude Code is open here, in $(& $list $off), but without Remote Control. You can type /remote-control in it and clear this box instead." }
+                                  Note = "Claude Code is open here, in $(& $list $off), but without Remote Control. You can type /remote-control in it and turn the switch off instead." }
     }
     [pscustomobject]@{ Check = $true; Enabled = $true; Note = 'No Claude Code session on this PC has Remote Control on.' }
 }

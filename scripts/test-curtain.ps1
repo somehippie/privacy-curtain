@@ -367,7 +367,7 @@ function Invoke-NoPin {
 }
 
 function Invoke-Launcher {
-    # The desktop launcher's Remote Control box: which Claude Code sessions count, and how the box starts.
+    # The desktop launcher's Remote Control switch: which Claude Code sessions count, and how the switch starts.
     # Fake session files in a throwaway folder; this PowerShell stands in for a running session.
     $s = 'launcher'
     $dir = Join-Path $testLocal 'sessions'
@@ -384,7 +384,7 @@ function Invoke-Launcher {
         Add-Result $s 'a running session with Remote Control on counts; one that has ended does not' `
             ($found.Count -eq 1 -and $found[0].Pid -eq $PID -and $found[0].RemoteControl -and $found[0].Folder -eq 'C:\work\demo')
         $on = Get-RemoteControlAdvice $found $true
-        Add-Result $s 'with Remote Control already on, the box starts cleared and says where' (-not $on.Check -and $on.Enabled -and $on.Note -like '*demo (since *')
+        Add-Result $s 'with Remote Control already on, the switch starts off and says where' (-not $on.Check -and $on.Enabled -and $on.Note -like '*demo (since *')
 
         & $write "$PID.json" @{ pid = $PID; procStart = "$($started - 600000000)"; cwd = 'C:\work\demo'; bridgeSessionId = 'session_test' }
         Add-Result $s 'a file whose process id now belongs to another process does not count' (@(& $ours).Count -eq 0)
@@ -392,15 +392,29 @@ function Invoke-Launcher {
         & $write "$PID.json" @{ pid = $PID; procStart = "$started"; cwd = 'C:\work\demo' }
         $found = @(& $ours)
         $off = Get-RemoteControlAdvice $found $true
-        Add-Result $s 'a session without Remote Control: the box starts ticked and suggests /remote-control' `
+        Add-Result $s 'a session without Remote Control: the switch starts on and suggests /remote-control' `
             ($found.Count -eq 1 -and -not $found[0].RemoteControl -and $off.Check -and $off.Note -like '*/remote-control*')
         $none = Get-RemoteControlAdvice @() $true
         $missing = Get-RemoteControlAdvice @() $false
-        Add-Result $s 'no session: the box starts ticked; no Claude Code: it is cleared and disabled' `
+        Add-Result $s 'no session: the switch starts on; no Claude Code: it is off and disabled' `
             ($none.Check -and $none.Enabled -and -not $missing.Check -and -not $missing.Enabled)
     } finally {
         Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
     }
+
+    # The dialog answers through its file: the hours and the switch on "Raise curtain", nothing on Cancel.
+    # Its test keys go to the dialog itself, off screen, never to the window in front.
+    $ask = Join-Path $testLocal 'launch-ask.txt'
+    $request = [string[]]@('hours=24', 'remote=off', 'note=A test.')
+    [System.IO.File]::WriteAllLines($ask, $request)
+    $raised = Start-Process -FilePath $script:CurtainExe -ArgumentList @('--ask-launch', "`"$ask`"", '--test-keys', '8sr@0') -Wait -PassThru
+    $answer = (Get-Content -LiteralPath $ask -ErrorAction SilentlyContinue) -join ';'
+    [System.IO.File]::WriteAllLines($ask, $request)
+    $cancelled = Start-Process -FilePath $script:CurtainExe -ArgumentList @('--ask-launch', "`"$ask`"", '--test-keys', '8x@0') -Wait -PassThru
+    $kept = (Get-Content -LiteralPath $ask -ErrorAction SilentlyContinue) -join ';'
+    Remove-Item -LiteralPath $ask -Force -ErrorAction SilentlyContinue
+    Add-Result $s 'the dialog answers 8 hours with Remote Control on, and Cancel answers nothing' `
+        ($raised.ExitCode -eq 0 -and $answer -eq 'hours=8;remote=on' -and $cancelled.ExitCode -eq 20 -and $kept -like 'hours=24;*') "codes $($raised.ExitCode), $($cancelled.ExitCode)"
 
     # -Preview draws the dialog and starts nothing: no curtain, no new Claude Code.
     Stop-AnyCurtain
@@ -412,7 +426,7 @@ function Invoke-Launcher {
     Add-Type -AssemblyName System.Drawing
     if (Test-Path $png) { $img = [System.Drawing.Image]::FromFile($png); $size = $img.Size; $img.Dispose() }
     Add-Result $s 'curtain-launch.ps1 -Preview draws the dialog and starts nothing' `
-        ($size -and $size.Width -gt 200 -and $size.Height -gt 100 -and $text -like '*Remote Control box starts*' -and
+        ($size -and $size.Width -gt 200 -and $size.Height -gt 100 -and $text -like '*Remote Control switch starts*' -and
          (Get-CurtainProcess).Count -eq 0 -and @(Get-Process -Name 'claude' -ErrorAction SilentlyContinue).Count -le $before) "$($size.Width) x $($size.Height)"
     Remove-Item $png -Force -ErrorAction SilentlyContinue
 }

@@ -42,6 +42,8 @@ namespace ClaudeCurtain
         public const float ClockPerUnit = 2.15f;        // the clock's size in units; every other size is it over a power of φ
         public const double DriftPeriodSeconds = 300;   // one horizontal sweep; the vertical one is φ times longer
         public const double NightLevel = 0.70;          // the clock's brightness overnight
+        public const float MaxWidthShare = 0.90f;       // the block's largest share of the screen: the rest is the drift's room
+        public const float MaxHeightShare = 0.94f;      // (its own margin, unit/4, still keeps ink off the edges at the drift's ends)
         public const int FadeInMs = 900;
         public const int CrossFadeMs = 600;
         public const int DotPopMs = 180;
@@ -434,7 +436,7 @@ namespace ClaudeCurtain
             float unit = landscape ? Math.Max(16f, Math.Min(w, h) / 9f) : Math.Max(16f, Math.Min(w / 6.6f, h / 11.5f));
             for (int attempt = 0; attempt < 12; attempt++)
             {
-                Layout l = ComposeAt(s, unit, landscape, w * 0.90f, h * 0.90f, attempt == 11);
+                Layout l = ComposeAt(s, unit, landscape, w * MaxWidthShare, h * MaxHeightShare, attempt == 11);
                 if (l == null) return null;
                 if (l.Block != null) return l;
                 l.Dispose();
@@ -558,7 +560,16 @@ namespace ClaudeCurtain
                     if (hasMap)
                     {
                         float mapBottom = (float)Math.Round(ruleTop - st(3));   // level with the PIN hint's baseline
-                        L.Map = new RectangleF(0, mapTop, (float)Math.Round(leftW), Math.Max(8f, mapBottom - mapTop));
+                        float mapH = Math.Max(8f, mapBottom - mapTop);
+                        if (landscape && L.HasRight)
+                        {
+                            // A golden rectangle (φ : 1) where the screen has room for it, so a tall map never looks
+                            // narrow: the column widens to the map (the data column follows at φ : 1), but never
+                            // past the width the screen allows, so no screen has to step the scale down for it.
+                            float room = (float)Math.Floor((maxW - st(2) - 2 * (float)Math.Ceiling(unit * 0.25f)) / Phi);
+                            leftW = Math.Max(leftW, Math.Min((float)Math.Round(mapH * Phi), room));
+                        }
+                        L.Map = new RectangleF(0, mapTop, (float)Math.Round(leftW), mapH);
                         L.MapHeadBaseline = mapHead;
                         L.MapRuleY = mapRule;
                         AddMap(ops, m, s, L, fLabel, track, unit);
@@ -854,7 +865,7 @@ namespace ClaudeCurtain
                 if (b == null) t = 0;   // not ready yet: stay on this picture (it is rendered below)
                 DrawPicture(g, a, mx, my, dim * (1 - t));
                 if (b != null) DrawPicture(g, b, mx, my, dim * t);
-                if (t > 0 && t < 1) mapFading = true;
+                if (t > 0 && t < 1 && show > 0.004f) mapFading = true;   // a fade the PIN's veil hides needs no frames
 
                 MapFrame shown = t < 0.5f ? fr[i] : fr[j];
                 string when = shown.Utc.ToLocalTime().ToString("t", CultureInfo.CurrentCulture).ToUpperInvariant();
@@ -1230,17 +1241,19 @@ namespace ClaudeCurtain
                     y = vy + fData.Font.Size * 0.3f;
                 }
 
-                // ---- the next six hours: hour, symbol, temperature on a curve, chance of rain
-                y += st(4) + fLabel.CapHeight;
+                // ---- the next six hours: hour, symbol, temperature on a curve, chance of rain. Its sections sit
+                // a step apart (C/φ^3.5) and its curve and bars are generous: beside the map, this column's
+                // height is what gives the map its height.
+                y += st(3.5) + fLabel.CapHeight;
                 AddText(ops, m, "NEXT 6 HOURS", fLabel, Tertiary, ox, y, track);
                 float slot = w / 6f;
                 float hourBase = y + st(5) + fLabel.CapHeight;
                 float iconSz = (float)Math.Round(fData.CapHeight * 2.0f);
                 float iconTop = hourBase + st(6);
                 float curveTop = iconTop + iconSz + st(6) + fData.CapHeight + st(6.5);
-                float curveH = (float)Math.Round(st(4) * 0.85f);
+                float curveH = (float)Math.Round(st(3) * 0.85f);
                 float curveBottom = curveTop + curveH;
-                float barMax = (float)Math.Round(st(4.4));
+                float barMax = (float)Math.Round(st(4));
                 float barBase = curveBottom + st(5.5) + barMax;
                 float popBase = barBase + st(6.5) + fLabel.CapHeight;
                 if (hours.Length > 0)
@@ -1279,7 +1292,7 @@ namespace ClaudeCurtain
                 y = popBase + fLabel.Font.Size * 0.35f;
 
                 // ---- the next three days (three rows are always reserved)
-                y += st(4) + fLabel.CapHeight;
+                y += st(3.5) + fLabel.CapHeight;
                 AddText(ops, m, "NEXT 3 DAYS", fLabel, Tertiary, ox, y, track);
                 y += st(5) + fData.CapHeight;
                 float rowPitch = line2 + st(4) * 0.95f + fData.CapHeight;

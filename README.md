@@ -58,22 +58,27 @@ hours, at most 24 (`-Hours 24` for a full day).
 > $s.TargetPath = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
 > $s.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$PWD\scripts\curtain-launch.ps1`""
 > $s.WorkingDirectory = "$PWD"
-> $s.IconLocation = "$env:WINDIR\System32\imageres.dll,-59"   # a padlock
+> $s.IconLocation = "$PWD\bin\ClaudeCurtain.exe,0"   # the curtain's own icon: a closed curtain
 > $s.Save()
 > ```
 >
 > Or by hand: right-click the desktop > New > Shortcut, and paste
 > `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<repo>\scripts\curtain-launch.ps1"`.
 >
-> The shortcut opens a small dialog: how many hours (prefilled 12, any value 1–24), and a box, *Open Claude
-> Code with Remote Control*. Ticked, and with [Claude Code](https://claude.com/claude-code) installed, it
-> first starts a Remote Control session named `privacy-curtain` in Windows Terminal, so the PC stays
-> reachable from your phone or another computer while the screen is dark (for example to run
-> `curtain-off.ps1`). The box starts cleared when a Claude Code session on this PC already has Remote Control
-> on, however it was turned on (`claude --remote-control`, or `/remote-control` typed in a session), and the
-> line under it says which, so launching the curtain again does not pile up windows. (It reads the small
-> file Claude Code keeps for each running session in `~\.claude\sessions`.) Then it raises the curtain with
-> no console window. Remote Control is best-effort: if it cannot start, the curtain still goes up.
+> The shortcut opens a small dialog, drawn by the curtain itself in its own design: the hours as a large
+> figure (prefilled 12, whole hours 1–24) with − and +, presets from 1 to 24 hours and the time the
+> curtain will close, then a switch, *Open Claude Code with Remote Control*. On, and with
+> [Claude Code](https://claude.com/claude-code) installed, it first starts a Remote Control session named
+> `privacy-curtain` in Windows Terminal, so the PC stays reachable from your phone or another computer
+> while the screen is dark (for example to run `curtain-off.ps1`). The switch starts off when a Claude
+> Code session on this PC already has Remote Control on, however it was turned on (`claude
+> --remote-control`, or `/remote-control` typed in a session), and the line under it says which, so
+> launching the curtain again does not pile up windows. (It reads the small file Claude Code keeps for
+> each running session in `~\.claude\sessions`.) Then it raises the curtain with no console window.
+> Digits and the arrow keys set the hours, Tab moves, Space flips the switch, Enter raises, Esc cancels.
+> Remote Control is best-effort: if it cannot start, the curtain still goes up.
+>
+> ![The launcher's dialog: RAISE THE CURTAIN, 8 hours with minus and plus, the time it will close, presets from 1 to 24 hours, the Remote Control switch with its note, and the Cancel and Raise curtain buttons](docs/launch.png)
 
 ## Ways back in
 
@@ -195,7 +200,8 @@ about what it is doing. Everything on it comes from one proportional system buil
   it, and typed PIN dots appear in the open space between. Beside the map, the forecast's header shares the
   map's header line, so the weather starts at one height across the page. On a portrait screen the data
   moves under the message. The composition rests on the golden section of the screen: the space above it and below it
-  are 1 : φ.
+  are 1 : φ. It takes at most 90% of the screen's width and 94% of its height; the rest is room for the
+  drift.
 - **A fixed frame.** Every slot is sized for the widest value it can ever hold (CPU "100%", a network
   rate of "999.9 KB/s", the widest time the clock's digits can make, "WEDNESDAY", "−99°"), and the image
   size comes from the grid, never from the ink. Changing numbers therefore never resize or move the
@@ -219,8 +225,9 @@ about what it is doing. Everything on it comes from one proportional system buil
   sections ("RADAR · PAST HOUR", the picture's time at the right). On a landscape screen the data column
   decides where the message sits, so the map fills space that was empty and moves nothing else; its header
   shares a line with the forecast's, which gives it the room the forecast takes below that line. It shows
-  120 km top to bottom, with home as a small accent-coloured dot on the golden section both ways, so the
-  larger parts of the map lie to the west, where weather usually comes from, and to the north. It is drawn
+  135 km top to bottom, as a golden rectangle where the screen has room for one, with home as a small
+  accent-coloured dot on the golden section across and 7/10 of the way down, so the larger parts of the
+  map lie to the west, where weather usually comes from, and to the north. It is drawn
   in the curtain's own palette rather than the services' colours: water a shade lighter than the black
   land, the shoreline a fine line drawn over the weather so the coast stays readable under fog, rain in
   the data hue from quiet to bright as it gets heavier (amber when heavy, coral when severe, with a
@@ -246,9 +253,9 @@ about what it is doing. Everything on it comes from one proportional system buil
   (about 30 to 50 ms), and moved as one rigid piece a whole pixel at a time, so lines never shimmer
   against each other. It fades in when the curtain rises and cross-fades when the minute turns. The
   accent rule breathes slowly while the curtain is up, a quiet sign that the PC is at work. Typed PIN dots
-  ease in, and a wrong PIN shakes them before they fade and the note appears. Every 30 seconds the map
-  replays its past hour in about five seconds, each picture cross-fading into the next, while a short
-  mark runs along its header's rule; then it rests on the latest picture. The screen repaints at about
+  ease in, and a wrong PIN shakes them before they fade and the note appears. The map plays its past
+  hour on a loop, a picture every 0.7 s, each cross-fading into the next, holding the latest for two
+  steps, while a short mark runs along its header's rule. The screen repaints at about
   60 frames a second only while one of these short animations plays, and five times a second otherwise.
 - **Drift.** Against burn-in, the composition wanders within 5% of its resting point: one sweep across
   every 5 minutes and one sweep down every 5 × φ ≈ 8.1 minutes. Because φ is irrational the path never
@@ -263,10 +270,11 @@ preview mode:
 .\bin\ClaudeCurtain.exe --render-preview "$env:TEMP\curtain.png" --test-screen 2560x1440 --test-state typing
 .\bin\ClaudeCurtain.exe --render-preview "$env:TEMP\construction.png" --overlay
 .\bin\ClaudeCurtain.exe --render-preview "$env:TEMP\summary.png" --test-state summary
+.\bin\ClaudeCurtain.exe --render-preview "$env:TEMP\launch.png" --test-state launch
 .\bin\ClaudeCurtain.exe --render-drift "$env:TEMP\drift.png"
 ```
 
-`--test-state` is one of idle, typing, wrong, shake, cooldown, admin, bright, night, summary, or radar or
+`--test-state` is one of idle, typing, wrong, shake, cooldown, admin, bright, night, summary, launch, or radar or
 clouds to force the map's mode; `--preview-seconds N` shows the drift position N seconds in. With
 `--local-dir` pointing at a folder that has a `map.txt`, the preview uses that real map, at the real time
 and with the real hourly forecast; otherwise it draws a made-up sample place (a coast, a river and a lake),
@@ -344,7 +352,8 @@ And in the left column:
   pictures, the station reports and the tide) and, in the background, refreshes it every 5 minutes
   (`-MapMinutes`), keeping only the last hour of pictures. The map's credit reads "NOAA · USGS ·
   © OpenStreetMap".
-  Requests carry a box of 1.6 × 3 degrees around the forecast grid, rounded to a tenth of a degree (about
+  Requests carry a box of 1.6 × 3.4 degrees around the forecast grid (0.6° south of it to 1.0° north),
+  rounded to a tenth of a degree (about
   10 km), so the servers learn the area, never the address; no key, no account. Pictures more than three
   hours old are never shown, and with no map files at all the curtain looks exactly as it did before the
   map. `-NoMap` leaves it out. Like the forecast, it covers the United States.
@@ -385,7 +394,7 @@ Please read these before relying on the curtain.
 ```
 
 They use a throwaway PIN in `local\test` and never touch the real one, and they never call your notify
-hook. The self-tests (~124 checks, including PIN hashing/entry rules, which key presses belong to your own
+hook. The self-tests (~126 checks, including PIN hashing/entry rules, which key presses belong to your own
 unlock, the time-zone label, the stats sampler, weather-file reading, and the design: every state rendered
 at 720p, 1080p, 16:10, 1440p, ultrawide and portrait, fitting the screen, the columns exactly φ : 1, the
 forecast's header on the map's line,
@@ -401,8 +410,8 @@ lifecycle suite (100+ checks: a screenshot seeing the
 desktop through the curtain, injected clicks and typing passing through, simulated shutdown, every hang
 being recovered, the keep-awake request appearing with the curtain and vanishing with it, the alerts, the
 re-assert, the event log/summary, the summary window laid out at 720p, 1080p and 1440p with nothing
-clipped, and the launcher's Remote Control box: which Claude Code sessions count, a session that has ended
-or whose process id was reused not counting, and how the box starts) both pass. The on-screen info
+clipped, and the launcher: which Claude Code sessions count, a session that has ended or whose process id was
+reused not counting, how its Remote Control switch starts, and its dialog answering through its file) both pass. The on-screen info
 panel and real physical key presses are not script-testable (the curtain is excluded from screen capture by
 design); a person-at-the-PC checklist is in the lifecycle test's output.
 
