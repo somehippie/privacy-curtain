@@ -76,7 +76,7 @@ namespace ClaudeCurtain
             moments.Add(new KeyValuePair<double, string>(7230, "wrong-pin"));
             moments.Add(new KeyValuePair<double, string>(7290, "wrong-pin"));
             moments.Add(new KeyValuePair<double, string>(31530, "security-screen"));
-            using (SummaryView v = new SummaryView(text, moments, 12 * 3600 + 4 * 60, new Size(w, h)))
+            using (SummaryView v = new SummaryView(text, moments, 12 * 3600 + 4 * 60, new Size(w, h), 1.0))
             using (Bitmap b = new Bitmap(v.ClientSize.Width, v.ClientSize.Height, PixelFormat.Format32bppArgb))
             using (Graphics g = Graphics.FromImage(b))
             {

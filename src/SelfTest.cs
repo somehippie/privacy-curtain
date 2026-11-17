@@ -491,6 +491,37 @@ namespace ClaudeCurtain
             Check("colour: every text tone meets WCAG AA on black (4.5:1)", aa);
             Check("colour: body text and values meet WCAG AAA on black (7:1)", CurtainPainter.ContrastOnBlack(CurtainPainter.Secondary) >= 7.0);
 
+            // The clock has its own tone, a step under hero (at its size hero glares, above all at night), and
+            // dims overnight: the composed frame really paints it so.
+            bool clockTone = CurtainPainter.Time.R < CurtainPainter.Hero.R;
+            string clockSeen = "";
+            foreach (string clockState in new[] { "idle", "night" })
+            {
+                DisplayState clockSample = CurtainPreview.Sample(new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir"), TestState = clockState });
+                Color clockWant = CurtainPainter.Scale(CurtainPainter.Time, clockState == "night" ? CurtainPainter.NightLevel : 1.0);
+                using (CurtainPainter.Layout clockLayout = CurtainPainter.Compose(clockSample, 2560, 1440))
+                {
+                    int[] clockPx = MapArt.GetPixels(clockLayout.Block);
+                    int clockW = clockLayout.Block.Width, brightest = 0;
+                    int cx0 = Math.Max(0, (int)(clockLayout.OriginX + clockLayout.LeftCol.Left));
+                    int cx1 = Math.Min(clockW, (int)(clockLayout.OriginX + clockLayout.LeftCol.Right));
+                    float clockBase = 0;
+                    foreach (KeyValuePair<string, float> b in clockLayout.Baselines) if (b.Key == "C") { clockBase = b.Value; break; }
+                    int cy0 = Math.Max(0, (int)clockLayout.OriginY);
+                    int cy1 = Math.Min(clockLayout.Block.Height, (int)(clockLayout.OriginY + clockBase));
+                    for (int cy = cy0; cy < cy1; cy++)       // the band of the digits (and AM/PM): nothing else is there
+                        for (int cx = cx0; cx < cx1; cx++)
+                        {
+                            int p = clockPx[cy * clockW + cx];
+                            if (((p >> 24) & 0xFF) >= 250) brightest = Math.Max(brightest, (p >> 16) & 0xFF);
+                        }
+                    clockSeen += (clockSeen.Length > 0 ? ", " : "") + clockState + " " + brightest;
+                    if (Math.Abs(brightest - clockWant.R) > 2) clockTone = false;
+                }
+            }
+            lines.Add("INFO  the clock's brightest red: " + clockSeen + " (the time " + CurtainPainter.Time.R + ", hero " + CurtainPainter.Hero.R + ")");
+            Check("colour: the clock is painted in its own tone, a step under hero, and dims overnight", clockTone);
+
             // Motion: the animations run with a fixed clock, start fast frames, and settle again.
             using (Bitmap canvas = new Bitmap(1280, 720))
             using (Graphics g = Graphics.FromImage(canvas))

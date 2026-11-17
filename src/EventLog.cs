@@ -215,7 +215,7 @@ namespace ClaudeCurtain
 
     /// <summary>
     /// The "While you were away" window shown after a PIN unlock, in the curtain's design language: the
-    /// session length as the hero figure, a timeline of the session (short neutral ticks where someone was
+    /// session length as the hero figure (in the clock's tone, dimmed overnight like the clock), a timeline of the session (short neutral ticks where someone was
     /// at the keyboard or mouse, taller accent ticks for alerts), then the counts as a table. It sizes itself
     /// to its content and to the screen, never takes focus, and closes itself after 10 seconds.
     /// </summary>
@@ -247,6 +247,7 @@ namespace ClaudeCurtain
         private readonly Model model;
         private readonly List<KeyValuePair<double, string>> moments;   // seconds from start, kind (null: none)
         private readonly double span;
+        private readonly double night;     // the clock's brightness as the window opens: 1 by day, less overnight
         private readonly Size screen;      // the screen size the text is scaled to
         private readonly Rectangle area;   // where the window may sit: the primary monitor's working area
         private readonly List<Item> items = new List<Item>();
@@ -257,7 +258,7 @@ namespace ClaudeCurtain
         private int columns = 1;
         private int secondsLeft = 10;
 
-        public SummaryView(string text, List<KeyValuePair<double, string>> moments, double span, Size testScreen)
+        public SummaryView(string text, List<KeyValuePair<double, string>> moments, double span, Size testScreen, double night)
         {
             Rectangle bounds = new Rectangle(0, 0, 1920, 1080);
             Rectangle work = bounds;
@@ -275,6 +276,7 @@ namespace ClaudeCurtain
             model = Parse(text);
             this.moments = moments;
             this.span = span;
+            this.night = night > 0 && night <= 1 ? night : 1.0;
 
             Text = "While you were away";
             AutoScaleMode = AutoScaleMode.None;
@@ -384,7 +386,7 @@ namespace ClaudeCurtain
                 if (model.Duration.Length > 0)
                 {
                     y += st(4.5) + fHero.CapHeight;
-                    Add(model.Duration, fHero, CurtainPainter.Hero, x, y, 0);
+                    Add(model.Duration, fHero, CurtainPainter.Scale(CurtainPainter.Time, night), x, y, 0);
                     contentW = Math.Max(contentW, width(model.Duration, fHero, 0));
                     y += st(5) + fLabel.CapHeight;
                     string range = (model.From + "   →   " + model.To).ToUpperInvariant();
@@ -611,7 +613,7 @@ namespace ClaudeCurtain
             List<KeyValuePair<double, string>> moments = ReadTimeline(o.TimelineFile, o.SummaryFile, out span);
 
             Application.EnableVisualStyles();
-            using (SummaryView view = new SummaryView(text, moments, span, testScreen))
+            using (SummaryView view = new SummaryView(text, moments, span, testScreen, CurtainPainter.NightFactor(DateTime.Now)))
             {
                 if (!string.IsNullOrEmpty(o.OutFile))
                 {

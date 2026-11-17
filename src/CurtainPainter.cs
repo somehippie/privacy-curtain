@@ -50,7 +50,8 @@ namespace ClaudeCurtain
         public const double BreathSeconds = 7.0;
 
         // ---- Colour tokens. Text tones are checked against WCAG contrast on black by the self-tests.
-        internal static readonly Color Hero = Color.FromArgb(226, 222, 214);       // the time
+        internal static readonly Color Hero = Color.FromArgb(226, 222, 214);       // "now": the PIN dots, the latest points, the hour now
+        internal static readonly Color Time = Color.FromArgb(182, 178, 171);       // the clock, a step under Hero: at its size it would glare
         internal static readonly Color Primary = Color.FromArgb(206, 202, 194);    // title, highs
         internal static readonly Color Secondary = Color.FromArgb(160, 156, 149);  // body, values, chart marks (AAA)
         internal static readonly Color Tertiary = Color.FromArgb(126, 122, 116);   // labels, notes (AA)
@@ -66,6 +67,8 @@ namespace ClaudeCurtain
         {
             new KeyValuePair<string, Color>("hero", Hero),
             new KeyValuePair<string, Color>("hero at night", Scale(Hero, NightLevel)),
+            new KeyValuePair<string, Color>("the time", Time),
+            new KeyValuePair<string, Color>("the time at night", Scale(Time, NightLevel)),
             new KeyValuePair<string, Color>("primary", Primary),
             new KeyValuePair<string, Color>("secondary", Secondary),
             new KeyValuePair<string, Color>("tertiary", Tertiary),
@@ -459,7 +462,9 @@ namespace ClaudeCurtain
             float track = fLabel.Font.Size * 0.14f;
             L.Body = fBody; L.Label = fLabel; L.Small = fSmall; L.Data = fData; L.Track = track;
             L.Tiny = fTiny; L.TinyTrack = fTiny.Font.Size * 0.14f;
-            Color hero = Scale(Hero, s.NightDim > 0 ? s.NightDim : 1.0);
+            double night = s.NightDim > 0 ? s.NightDim : 1.0;
+            Color hero = Scale(Hero, night);   // the message's first line while someone is at the keyboard
+            Color time = Scale(Time, night);   // the clock
 
             List<Op> ops = new List<Op>();
             try
@@ -472,7 +477,7 @@ namespace ClaudeCurtain
                     // ---------------- left column: x = 0 is its edge, y = 0 the top of the digits
                     float y = fClock.CapHeight;
                     L.Baselines.Add(new KeyValuePair<string, float>("C", y));
-                    float leftW = AddClock(ops, m, s.Clock ?? "", fClock, fSuffix, hero, track, y, st(6), L);
+                    float leftW = AddClock(ops, m, s.Clock ?? "", fClock, fSuffix, time, track, y, st(6), L);
                     // ...but sized for the widest time it can ever show, so the minute turning moves nothing.
                     string clockText = L.ClockText;
                     bool twelve = (s.Clock ?? "").Trim().IndexOf(' ') > 0;
@@ -481,7 +486,7 @@ namespace ClaudeCurtain
                     string any = WidestDigit(m, fClock.Font, "0123456789"), tens = WidestDigit(m, fClock.Font, "012345");
                     string widest = (twelve ? "1" + WidestDigit(m, fClock.Font, "012") : WidestDigit(m, fClock.Font, "012") + any) + ":" + tens + any;
                     foreach (string suffix in twelve ? new[] { " AM", " PM" } : new[] { "" })
-                        leftW = Math.Max(leftW, AddClock(new List<Op>(), m, widest + suffix, fClock, fSuffix, hero, track, y, st(6), L));
+                        leftW = Math.Max(leftW, AddClock(new List<Op>(), m, widest + suffix, fClock, fSuffix, time, track, y, st(6), L));
                     L.ClockText = clockText;
 
                     string date = (s.Date ?? "").ToUpperInvariant();
@@ -1068,8 +1073,10 @@ namespace ClaudeCurtain
             float right = x;
             if (suffix.Length > 0)
             {
+                // AM/PM is a step quieter than the digits, and never brighter than them when they dim overnight.
                 float sx = right + gap;
-                right = sx + AddText(ops, m, suffix, fSuffix, Secondary, sx, baseline - f.CapHeight + fSuffix.CapHeight, track * 1.2f);
+                Color quiet = color.R < Secondary.R ? color : Secondary;
+                right = sx + AddText(ops, m, suffix, fSuffix, quiet, sx, baseline - f.CapHeight + fSuffix.CapHeight, track * 1.2f);
             }
             return right;
         }

@@ -132,12 +132,12 @@ Task Manager coming to the front and any administrator window taking focus; sess
 Desktop; network drops and returns; the process being killed; and, at the next start, an earlier curtain
 that ended with no record (power cut, crash, kill).
 
-On a PIN unlock a "While you were away" window shows how long you were gone, a timeline of the session
-(short neutral ticks for minutes when someone was at the keyboard or mouse, taller accent ticks for
-alerts such as a wrong PIN or the security screen), and the totals as a table. It never takes focus and
-closes itself after 10 seconds. It sizes itself to its content and the screen: a long summary first flows
-its table into more columns, then steps its text down, until it fits. `curtain-off.ps1` prints the same
-summary as text.
+On a PIN unlock a "While you were away" window shows how long you were gone (in the clock's tone, dimmed
+overnight like the clock), a timeline of the session (short neutral ticks for minutes when someone was at
+the keyboard or mouse, taller accent ticks for alerts such as a wrong PIN or the security screen), and the
+totals as a table. It never takes focus and closes itself after 10 seconds. It sizes itself to its content
+and the screen: a long summary first flows its table into more columns, then steps its text down, until it
+fits. `curtain-off.ps1` prints the same summary as text.
 
 ![The "While you were away" window: 12 h 4 min, 11:44 PM to 11:49 AM, closed by PIN; a timeline with ticks; and a table of counts](docs/summary.png) The closing time is not shown on
 screen; `curtain-on.ps1` and `curtain-status.ps1` print it.
@@ -238,8 +238,10 @@ about what it is doing. Everything on it comes from one proportional system buil
   comes back when the row clears.
 - **Colour.** Warm neutrals in four text tones and one accent, the short terracotta rule. The self-tests
   compute each tone's contrast on black: every text tone meets WCAG AA (the faintest labels are 4.9 : 1)
-  and body text and values meet AAA (7.7 : 1). Overnight (10:30 PM to 6:30 AM, with hour-long ramps) the
-  clock dims to 70% so it glows less in a dark room, and still meets AAA.
+  and body text and values meet AAA (7.7 : 1). The clock has its own tone, a step under the brightest,
+  which is kept for "now" (the PIN dots, the charts' latest points): at its size the brightest would glare.
+  Overnight (10:30 PM to 6:30 AM, with hour-long ramps) the clock dims to 70% so it glows less in a dark
+  room, and still meets AA (5.1 : 1); AM/PM never outshines the digits.
 - **Motion.** The composition is rendered once into an image, again only when something on it changes
   (about 30 to 50 ms), and moved as one rigid piece a whole pixel at a time, so lines never shimmer
   against each other. It fades in when the curtain rises and cross-fades when the minute turns. The
@@ -383,7 +385,7 @@ Please read these before relying on the curtain.
 ```
 
 They use a throwaway PIN in `local\test` and never touch the real one, and they never call your notify
-hook. The self-tests (~123 checks, including PIN hashing/entry rules, which key presses belong to your own
+hook. The self-tests (~124 checks, including PIN hashing/entry rules, which key presses belong to your own
 unlock, the time-zone label, the stats sampler, weather-file reading, and the design: every state rendered
 at 720p, 1080p, 16:10, 1440p, ultrawide and portrait, fitting the screen, the columns exactly φ : 1, the
 forecast's header on the map's line,
