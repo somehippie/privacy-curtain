@@ -198,8 +198,8 @@ function Update-Forecast {
 # All keyless. The requests carry a box rounded to a tenth of a degree around the forecast grid, so the
 # servers learn the area, never the address. The curtain reads the pictures from local\ (map.txt lists them).
 $nowcoast = 'https://nowcoast.noaa.gov/geoserver'
-$mapHalfLat = 0.6     # the box: 1.2 x 3 degrees (about 130 x 255 km at 40 degrees north), wider than the curtain shows
-$mapHalfLon = 1.5
+$mapHalfLat = 0.8     # the box: 1.6 x 3 degrees (about 180 x 255 km at 40 degrees north), more than the curtain shows;
+$mapHalfLon = 1.5     # whole tenths only, since map.txt gives the box to one decimal
 $mapFile = Join-Path $LocalDir 'map.txt'
 $mapNamePattern = '^(radar|sat-vis|sat-ir)-\d{8}T\d{6}Z\.(png|jpg)$'
 

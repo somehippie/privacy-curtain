@@ -108,7 +108,7 @@ namespace ClaudeCurtain
     {
         public const string IndexName = "map.txt";
         public const double KmPerDegree = 111.2;
-        public const double ViewKm = 100;         // how much of the area the map shows, top to bottom
+        public const double ViewKm = 120;         // how much of the area the map shows, top to bottom
         public const double StaleHours = 3;       // older pictures are never shown
         public const int RainDbz = 20;            // light rain on the radar
         public const int RainChance = 30;         // % chance in the next three hours that makes the map show radar

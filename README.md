@@ -205,7 +205,8 @@ about what it is doing. Everything on it comes from one proportional system buil
   Regular for data. Every size is the clock size divided by a power of φ, and every gap is a step on the
   same scale. Large type is aligned by its ink rather than its side bearing, the colon is lifted to the
   optical centre of the digits, AM/PM hangs small at cap height, and small capitals are letter-spaced.
-  Forecast text is set in sentence case.
+  Forecast text is set in sentence case. The message is set small (its title C/φ⁵, its two lines C/φ⁶,
+  the accent rule nearer the title than the map), so the map gets the height.
 - **Data.** CPU and download rate are ten-minute sparklines with the newest reading at the right and a dot
   on it; memory and disk are proportion bars. CPU is drawn on a fixed 0–100% scale, so a quiet machine
   looks quiet. Every value is also printed as text beside its graphic, so nothing depends on reading a
@@ -218,7 +219,7 @@ about what it is doing. Everything on it comes from one proportional system buil
   sections ("RADAR · PAST HOUR", the picture's time at the right). On a landscape screen the data column
   decides where the message sits, so the map fills space that was empty and moves nothing else; its header
   shares a line with the forecast's, which gives it the room the forecast takes below that line. It shows
-  100 km top to bottom, with home as a small accent-coloured dot on the golden section both ways, so the
+  120 km top to bottom, with home as a small accent-coloured dot on the golden section both ways, so the
   larger parts of the map lie to the west, where weather usually comes from, and to the north. It is drawn
   in the curtain's own palette rather than the services' colours: water a shade lighter than the black
   land, the shoreline a fine line drawn over the weather so the coast stays readable under fog, rain in
@@ -227,8 +228,9 @@ about what it is doing. Everything on it comes from one proportional system buil
   the brightest thing on screen. Under the weather the land's relief stays ground rather than picture: lit
   slopes, a faint warm tint on high ground and hairline contours every 200 m, like a topographic print.
   Over it, a few labels with a dark halo: station temperatures spread across the map, and wind only where
-  it is notable. The tide has a small table in one of the top corners, with what a fisherman or a surfer
-  looks for: "TIDE" with the day's curve (now a bright dot on it), the height now and an arrow for rising
+  it is notable. The tide has a small table in one of the top corners, set a half step under the map's
+  other labels so it hides little of the map, with what a fisherman or a surfer looks for:
+  "TIDE" with the day's curve (now a bright dot on it), the height now and an arrow for rising
   or falling; then the next low and high with their times, heights and the change from the high or low
   before ("−6.1": the water drops 6.1 ft). It takes the top corner that hides fewer temperatures; on a tie
   the one over more water (the tide's own element, with no towns or hills to hide), then the east one, where
@@ -340,7 +342,7 @@ And in the left column:
   pictures, the station reports and the tide) and, in the background, refreshes it every 5 minutes
   (`-MapMinutes`), keeping only the last hour of pictures. The map's credit reads "NOAA · USGS ·
   © OpenStreetMap".
-  Requests carry a box of 1.2 × 3 degrees around the forecast grid, rounded to a tenth of a degree (about
+  Requests carry a box of 1.6 × 3 degrees around the forecast grid, rounded to a tenth of a degree (about
   10 km), so the servers learn the area, never the address; no key, no account. Pictures more than three
   hours old are never shown, and with no map files at all the curtain looks exactly as it did before the
   map. `-NoMap` leaves it out. Like the forecast, it covers the United States.

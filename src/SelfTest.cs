@@ -633,11 +633,11 @@ namespace ClaudeCurtain
             // Which part of the area shows.
             {
                 GeoBox box = new GeoBox(44.4, -123.5, 45.6, -120.5), roomy = new GeoBox(44.2, -124.2, 45.8, -119.8);
-                GeoBox c = WeatherMap.Crop(roomy, 45.0, -122.0, 873, 454);
-                double homeX = (-122.0 - c.West) / (c.East - c.West) * 873, homeY = (c.North - 45.0) / (c.North - c.South) * 454;
-                Check("map: it shows 100 km top to bottom, keeps the map's shape, and puts home on the golden section both ways, the larger parts west and north of it",
-                      WeatherMap.ViewKm == 100 && Math.Abs(c.KmTall - WeatherMap.ViewKm) < 0.5 && Math.Abs(c.KmWide / c.KmTall - 873 / 454.0) < 0.02 &&
-                      Math.Abs(homeX - 873 / CurtainPainter.Phi) < 1.5 && Math.Abs(homeY - 454 / CurtainPainter.Phi) < 1.5);
+                GeoBox c = WeatherMap.Crop(roomy, 45.0, -122.0, 873, 536);
+                double homeX = (-122.0 - c.West) / (c.East - c.West) * 873, homeY = (c.North - 45.0) / (c.North - c.South) * 536;
+                Check("map: it shows 120 km top to bottom, keeps the map's shape, and puts home on the golden section both ways, the larger parts west and north of it",
+                      WeatherMap.ViewKm == 120 && Math.Abs(c.KmTall - WeatherMap.ViewKm) < 0.5 && Math.Abs(c.KmWide / c.KmTall - 873 / 536.0) < 0.02 &&
+                      Math.Abs(homeX - 873 / CurtainPainter.Phi) < 1.5 && Math.Abs(homeY - 536 / CurtainPainter.Phi) < 1.5);
                 GeoBox wide = WeatherMap.Crop(box, 45.0, -122.0, 3000, 100);
                 GeoBox edge = WeatherMap.Crop(box, 44.5, -123.45, 873, 390);
                 Check("map: it never reaches outside the pictures, even for a very wide map or a home near their edge",

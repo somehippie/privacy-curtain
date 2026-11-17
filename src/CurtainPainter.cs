@@ -301,7 +301,8 @@ namespace ClaudeCurtain
             public RectangleF Rule, LeftCol, RightCol;
             public bool Landscape, HasRight;
             public string ClockText = "";
-            public Face Body, Label, Small;
+            public Face Body, Label, Small, Tiny;   // Tiny: the tide table (TinyTrack, its letter-spacing)
+            public float TinyTrack;
 
             // The weather map (Map is empty when there is none): its picture's place, its header, what it plays.
             public RectangleF Map;
@@ -449,13 +450,15 @@ namespace ClaudeCurtain
             L.Landscape = landscape;
             Face fClock = L.Own(MakeFace(famLight, c));
             Face fSuffix = L.Own(MakeFace(famSemi, st(4)));
-            Face fTitle = L.Own(MakeFace(famSemi, st(4)));
-            Face fBody = L.Own(MakeFace(famSemi, st(5)));
+            Face fTitle = L.Own(MakeFace(famSemi, st(5)));      // the message's title; its lines are set in fSmall
+            Face fBody = L.Own(MakeFace(famSemi, st(5)));       // the PIN row's notes
             Face fData = L.Own(MakeFace(famRegular, st(5.5)));
             Face fLabel = L.Own(MakeFace(famRegular, st(6)));
             Face fSmall = L.Own(MakeFace(famRegular, st(6)));
+            Face fTiny = L.Own(MakeFace(famRegular, st(6.5)));  // the tide table on the map
             float track = fLabel.Font.Size * 0.14f;
             L.Body = fBody; L.Label = fLabel; L.Small = fSmall; L.Data = fData; L.Track = track;
+            L.Tiny = fTiny; L.TinyTrack = fTiny.Font.Size * 0.14f;
             Color hero = Scale(Hero, s.NightDim > 0 ? s.NightDim : 1.0);
 
             List<Op> ops = new List<Op>();
@@ -497,19 +500,21 @@ namespace ClaudeCurtain
                     // The message (rule, title, two lines) and the PIN row are measured now and placed after the
                     // data column: on a landscape screen the message's last line sits level with the data
                     // column's last line, so both columns share a top and a bottom edge, with the clock at the
-                    // top, the message at the foot, and the PIN row just above the message.
+                    // top, the message at the foot, and the PIN row just above the message. The message is set
+                    // small (title C/φ⁵, its lines C/φ⁶, the rule nearer the title than the map), so the map
+                    // gets the height.
                     float yDate = y;
                     float ruleW = (float)Math.Round(c / (Phi * Phi)), ruleH = Math.Max(1f, (float)Math.Round(unit / 70f));
                     string title = "PC in use by Claude";
                     string l1 = "Keyboard and mouse are locked while Claude works.";
                     string l2 = "Any attempt to use, unlock or interrupt this PC is logged.";
-                    float msgH = ruleH + st(3) + fTitle.CapHeight + st(5) + fBody.CapHeight + fBody.Font.Size * 1.5f;
+                    float msgH = ruleH + st(4) + fTitle.CapHeight + st(6) + fSmall.CapHeight + fSmall.Font.Size * 1.5f;
                     L.DotSize = Math.Max(6f, (float)Math.Round(st(6.5)));
                     float dotRow = Math.Max(L.DotSize, fBody.CapHeight);
                     float pinH = dotRow + st(5) + fLabel.CapHeight;
                     leftW = Math.Max(leftW, Measure(m, title, fTitle.Font, 0) - InkLeft(title, fTitle));
-                    leftW = Math.Max(leftW, Measure(m, l1, fBody.Font, 0));
-                    leftW = Math.Max(leftW, Measure(m, l2, fBody.Font, 0));
+                    leftW = Math.Max(leftW, Measure(m, l1, fSmall.Font, 0));
+                    leftW = Math.Max(leftW, Measure(m, l2, fSmall.Font, 0));
                     leftW = Math.Max(leftW, Measure(m, HintText, fLabel.Font, track));
                     leftW = Math.Max(leftW, Measure(m, AdminText, fSmall.Font, 0));
 
@@ -553,15 +558,15 @@ namespace ClaudeCurtain
                         L.MapRuleY = mapRule;
                         AddMap(ops, m, s, L, fLabel, track, unit);
                     }
-                    y = ruleTop + ruleH + st(3) + fTitle.CapHeight;
-                    L.Baselines.Add(new KeyValuePair<string, float>("C / \u03C6\u2074", y));
-                    AddText(ops, m, title, fTitle, Primary, -InkLeft(title, fTitle), y, 0);
-                    y += st(5) + fBody.CapHeight;
+                    y = ruleTop + ruleH + st(4) + fTitle.CapHeight;
                     L.Baselines.Add(new KeyValuePair<string, float>("C / \u03C6\u2075", y));
-                    AddText(ops, m, l1, fBody, s.Bright ? hero : Secondary, 0, y, 0);
-                    y += fBody.Font.Size * 1.5f;
-                    AddText(ops, m, l2, fBody, Secondary, 0, y, 0);
-                    float leftBottom = y + fBody.Font.Size * 0.3f;
+                    AddText(ops, m, title, fTitle, Primary, -InkLeft(title, fTitle), y, 0);
+                    y += st(6) + fSmall.CapHeight;
+                    L.Baselines.Add(new KeyValuePair<string, float>("C / \u03C6\u2076", y));
+                    AddText(ops, m, l1, fSmall, s.Bright ? hero : Secondary, 0, y, 0);
+                    y += fSmall.Font.Size * 1.5f;
+                    AddText(ops, m, l2, fSmall, Secondary, 0, y, 0);
+                    float leftBottom = y + fSmall.Font.Size * 0.3f;
 
                     float leftColW = leftW, rightW = 0, colX = 0, colY = 0;
                     if (L.HasRight)
@@ -729,10 +734,10 @@ namespace ClaudeCurtain
             }
 
             // Columns sized to what they hold; the curve takes the time column of the first row.
-            Face fl = L.Label, fs = L.Small;
-            float track = L.Track;
+            Face fl = L.Tiny, fs = L.Tiny;   // a half step under the map's other labels, so it hides less of the map
+            float track = L.TinyTrack;
             Func<double, float> st = k => (float)Math.Round(L.Unit * ClockPerUnit / Math.Pow(Phi, k));
-            float labelW = 0, timeW = st(3), heightW = 0, changeW = 0;
+            float labelW = 0, timeW = st(3.5), heightW = 0, changeW = 0;
             foreach (TideRow r in t.Rows)
             {
                 labelW = Math.Max(labelW, Measure(m, r.Label, fl.Font, track));
@@ -740,8 +745,8 @@ namespace ClaudeCurtain
                 heightW = Math.Max(heightW, Measure(m, r.Height, fs.Font, 0));
                 changeW = Math.Max(changeW, Measure(m, r.Change, fs.Font, 0));
             }
-            float padX = st(6.5), padY = st(7), gap = st(7), sparkH = (float)Math.Round(fs.CapHeight * 1.3f), pitch = fs.CapHeight + st(7);
-            float panelW = (float)Math.Ceiling(padX + labelW + st(6.5) + timeW + gap + heightW + gap + changeW + padX);
+            float padX = st(7), padY = st(7.5), gap = st(7.5), sparkH = (float)Math.Round(fs.CapHeight * 1.3f), pitch = fs.CapHeight + st(7.5);
+            float panelW = (float)Math.Ceiling(padX + labelW + st(7) + timeW + gap + heightW + gap + changeW + padX);
             float panelH = (float)Math.Ceiling(padY + sparkH + pitch * (t.Rows.Count - 1) + padY);
             if (panelW + 2 * pad > mw || panelH + pad + band > mh) return "-";
 
@@ -757,7 +762,7 @@ namespace ClaudeCurtain
 
             float left = t.Panel.Left, top = t.Panel.Top;
             t.LabelX = left + padX;
-            t.TimeRight = (float)Math.Round(t.LabelX + labelW + st(6.5) + timeW);
+            t.TimeRight = (float)Math.Round(t.LabelX + labelW + st(7) + timeW);
             t.HeightRight = (float)Math.Round(t.TimeRight + gap + heightW);
             t.ChangeRight = (float)Math.Round(t.HeightRight + gap + changeW);
             for (int i = 0; i < t.Rows.Count; i++) t.Rows[i].Baseline = (float)Math.Round(top + padY + sparkH + pitch * i);
@@ -940,13 +945,13 @@ namespace ClaudeCurtain
         /// </summary>
         private static void DrawTide(Graphics og, Layout l, TideChart t)
         {
-            Face fl = l.Label, fs = l.Small;
+            Face fl = l.Tiny, fs = l.Tiny;
             using (SolidBrush ground = new SolidBrush(Color.FromArgb(200, 0, 0, 0)))
                 og.FillRectangle(ground, t.Panel);
             foreach (TideRow r in t.Rows)
             {
                 float top = (float)Math.Round(r.Baseline - fs.Ascent);
-                DrawText(og, r.Label, fl.Font, Tertiary, (float)Math.Round(t.LabelX), (float)Math.Round(r.Baseline - fl.Ascent), l.Track, 0);
+                DrawText(og, r.Label, fl.Font, Tertiary, (float)Math.Round(t.LabelX), (float)Math.Round(r.Baseline - fl.Ascent), l.TinyTrack, 0);
                 DrawText(og, r.Time, fs.Font, Secondary, (float)Math.Round(t.TimeRight - Measure(og, r.Time, fs.Font, 0)), top, 0, 0);
                 DrawText(og, r.Height, fs.Font, Primary, (float)Math.Round(t.HeightRight - Measure(og, r.Height, fs.Font, 0)), top, 0, 0);
                 DrawText(og, r.Change, fs.Font, Secondary, (float)Math.Round(t.ChangeRight - Measure(og, r.Change, fs.Font, 0)), top, 0, 0);
@@ -965,7 +970,7 @@ namespace ClaudeCurtain
             using (Pen line = new Pen(Secondary, lw) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round })
                 og.DrawLines(line, coming);
             PointF p = t.Curve[t.Now];
-            float d = Math.Max(5f, l.Unit / 20f);
+            float d = Math.Max(5f, l.Unit / 25f);
             using (SolidBrush ring = new SolidBrush(Color.Black))
                 og.FillEllipse(ring, p.X - d / 2f - lw, p.Y - d / 2f - lw, d + 2 * lw, d + 2 * lw);
             using (SolidBrush dot = new SolidBrush(Hero))
