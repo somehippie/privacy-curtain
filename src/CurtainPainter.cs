@@ -328,28 +328,31 @@ namespace ClaudeCurtain
             }
         }
 
-        /// <summary>The tide inset on the map, in map pixels: a day of the nearest station's tide.</summary>
+        /// <summary>
+        /// The tide inset, in map pixels: a small table of the nearest station's tide. Its first row is now
+        /// (the day's curve with now on it, the height now, rising or falling), then the next low and high.
+        /// </summary>
         internal sealed class TideChart
         {
             public RectangleF Panel;                         // its dark ground
-            public RectangleF Plot;                          // where the curve runs; its bottom is the baseline
+            public RectangleF Spark;                         // the day's curve, in the first row; its bottom is the baseline
             public PointF[] Curve = new PointF[0];           // TidePastHours ago to TideHours later, oldest first
             public int Now;                                  // Curve[Now] is now
-            public string Title = "";                        // "TIDE · RISING"
-            public float TitleBaseline, RuleY;
-            public readonly List<TideMark> Marks = new List<TideMark>();
+            public readonly List<TideRow> Rows = new List<TideRow>();
+            public float LabelX, TimeRight, HeightRight, ChangeRight;   // the columns: labels from the left, the rest to the right
         }
 
-        /// <summary>A high or low on the tide inset and its time, written above a high and below a low.</summary>
-        internal sealed class TideMark
+        /// <summary>
+        /// One row of the tide inset: "LOW", "11:57 PM", "1.3 ft", "−6.1" (the change since the high or low
+        /// before). The first row is "TIDE", the curve instead of a time, the height now, and ↑ or ↓.
+        /// </summary>
+        internal sealed class TideRow
         {
-            public PointF At;
-            public bool High, Past;
-            public string Text = "";   // "3:37 PM"
-            public float X, Baseline;  // where Text is written
+            public string Label = "", Time = "", Height = "", Change = "";
+            public float Baseline;
         }
 
-        public const int TidePastHours = 4;   // the tide inset starts this long ago...
+        public const int TidePastHours = 4;   // the tide inset's curve starts this long ago...
         public const int TideHours = 24;      // ...and shows a day
 
         private sealed class Op
@@ -691,10 +694,12 @@ namespace ClaudeCurtain
         }
 
         /// <summary>
-        /// The tide inset: "TIDE · RISING" over a day of the nearest station's tide, from four hours ago, with now
-        /// marked on the curve and the time of each high written above it and each low below it. It takes the
-        /// top corner that hides fewer temperatures, on a tie the east one (where the weather has already gone
-        /// by), and never covers home. Returns a key for what it shows ("-" when there is no tide, or no room).
+        /// The tide inset: a small table for a quick look, as a fisherman or surfer would want it. "TIDE", the
+        /// day's curve from four hours ago with now on it, the height now and an arrow, rising or falling; then
+        /// the next low and high in the order they come, each with its time, its height and the change from the
+        /// high or low before ("−6.1": the water drops 6.1 ft). It takes the top corner that hides fewer
+        /// temperatures, on a tie the east one (where the weather has already gone by), and never covers home.
+        /// Returns a key for what it shows ("-" when there is no tide, or no room).
         /// </summary>
         private static string PlaceTide(Graphics m, Layout L, MapTide tide, int mw, int mh, DateTime nowLocal,
                                         float pad, float band, List<RectangleF> taken, List<PlacedStation> shown)
@@ -703,19 +708,33 @@ namespace ClaudeCurtain
             if (tide == null) return "-";
             DateTime now = nowLocal.ToUniversalTime();
             int next = tide.NextEvent(now);
-            if (double.IsNaN(tide.HeightAt(now)) || next < 0) return "-";
+            double heightNow = tide.HeightAt(now);
+            if (double.IsNaN(heightNow) || next < 0) return "-";
 
-            Face f = L.Label;
-            float cap = f.CapHeight, track = L.Track;
+            TideChart t = new TideChart();
+            t.Rows.Add(new TideRow { Label = "TIDE", Height = Feet(heightNow, false) + " ft", Change = tide.High[next] ? "\u2191" : "\u2193" });
+            for (int i = next; i < tide.Times.Length && i < next + 2; i++)
+            {
+                t.Rows.Add(new TideRow { Label = tide.High[i] ? "HIGH" : "LOW", Height = Feet(tide.Feet[i], false) + " ft",
+                                         Time = tide.Times[i].ToLocalTime().ToString("t", CultureInfo.CurrentCulture).ToUpperInvariant(),
+                                         Change = i > 0 ? Feet(tide.Feet[i] - tide.Feet[i - 1], true) : "" });
+            }
+
+            // Columns sized to what they hold; the curve takes the time column of the first row.
+            Face fl = L.Label, fs = L.Small;
+            float track = L.Track;
             Func<double, float> st = k => (float)Math.Round(L.Unit * ClockPerUnit / Math.Pow(Phi, k));
-            float padX = st(6.5), padTop = st(7), padBottom = st(7), gap = st(8.5);
-            float plotW = st(1), curveH = st(4.5);
-            float titleBase = padTop + cap;
-            float ruleY = titleBase + st(7.5);          // a hairline under the title, as under the map's own header
-            float highBase = ruleY + st(7) + cap;
-            float plotTop = highBase + gap, plotBottom = plotTop + curveH;
-            float lowBase = plotBottom + gap + cap;
-            float panelW = plotW + 2 * padX, panelH = lowBase + padBottom;
+            float labelW = 0, timeW = st(3), heightW = 0, changeW = 0;
+            foreach (TideRow r in t.Rows)
+            {
+                labelW = Math.Max(labelW, Measure(m, r.Label, fl.Font, track));
+                timeW = Math.Max(timeW, Measure(m, r.Time, fs.Font, 0));
+                heightW = Math.Max(heightW, Measure(m, r.Height, fs.Font, 0));
+                changeW = Math.Max(changeW, Measure(m, r.Change, fs.Font, 0));
+            }
+            float padX = st(6.5), padY = st(7), gap = st(7), sparkH = (float)Math.Round(fs.CapHeight * 1.3f), pitch = fs.CapHeight + st(7);
+            float panelW = (float)Math.Ceiling(padX + labelW + st(6.5) + timeW + gap + heightW + gap + changeW + padX);
+            float panelH = (float)Math.Ceiling(padY + sparkH + pitch * (t.Rows.Count - 1) + padY);
             if (panelW + 2 * pad > mw || panelH + pad + band > mh) return "-";
 
             RectangleF east = new RectangleF(mw - pad - panelW, pad, panelW, panelH), west = new RectangleF(pad, pad, panelW, panelH);
@@ -726,17 +745,17 @@ namespace ClaudeCurtain
             };
             int hideEast = hides(east), hideWest = hides(west);
             if (hideEast == int.MaxValue && hideWest == int.MaxValue) return "-";
-            bool toWest = hideWest < hideEast;
+            t.Panel = hideWest < hideEast ? west : east;
 
-            TideChart t = new TideChart();
-            float left = toWest ? west.Left : east.Left, top = pad;
-            t.Panel = new RectangleF(left, top, panelW, panelH);
-            t.Plot = new RectangleF(left + padX, top + plotTop, plotW, curveH);
-            t.TitleBaseline = top + titleBase;
-            t.RuleY = top + ruleY;
-            t.Title = "TIDE   ·   " + (tide.High[next] ? "RISING" : "FALLING");
+            float left = t.Panel.Left, top = t.Panel.Top;
+            t.LabelX = left + padX;
+            t.TimeRight = (float)Math.Round(t.LabelX + labelW + st(6.5) + timeW);
+            t.HeightRight = (float)Math.Round(t.TimeRight + gap + heightW);
+            t.ChangeRight = (float)Math.Round(t.HeightRight + gap + changeW);
+            for (int i = 0; i < t.Rows.Count; i++) t.Rows[i].Baseline = (float)Math.Round(top + padY + sparkH + pitch * i);
+            t.Spark = new RectangleF(t.TimeRight - timeW, t.Rows[0].Baseline - sparkH, timeW, sparkH);
 
-            // The curve, every ten minutes; the lowest point of the day sits a little above the baseline.
+            // The curve, every ten minutes, scaled to the day's range like the system graphs.
             DateTime start = now.AddHours(-TidePastHours);
             const int stepMin = 10;
             int n = TideHours * 60 / stepMin + 1;
@@ -747,42 +766,25 @@ namespace ClaudeCurtain
             double lo = double.MaxValue, hi = double.MinValue;
             foreach (double v in h) { lo = Math.Min(lo, v); hi = Math.Max(hi, v); }
             double range = Math.Max(1.0, hi - lo);
-            const float floor = 0.12f;
-            Func<double, float> yOf = v => t.Plot.Bottom - (float)(floor + (1 - floor) * (v - lo) / range) * curveH;
-            Func<DateTime, float> xOf = u => t.Plot.Left + (float)((u - start).TotalMinutes / (TideHours * 60.0)) * plotW;
             t.Curve = new PointF[n];
-            for (int k = 0; k < n; k++) t.Curve[k] = new PointF(t.Plot.Left + plotW * k / (n - 1), yOf(h[k]));
+            for (int k = 0; k < n; k++)
+                t.Curve[k] = new PointF(t.Spark.Left + t.Spark.Width * k / (n - 1), t.Spark.Bottom - (float)((h[k] - lo) / range) * (sparkH - 1));
             t.Now = TidePastHours * 60 / stepMin;
-
-            // The highs and lows of the day, their times above or below them. The coming ones are written
-            // first; one that would crowd a time already written is left out.
-            DateTime end = start.AddHours(TideHours);
-            List<TideMark> marks = new List<TideMark>();
-            for (int i = 0; i < tide.Times.Length; i++)
-            {
-                if (tide.Times[i] < start || tide.Times[i] > end) continue;
-                marks.Add(new TideMark { At = new PointF(xOf(tide.Times[i]), yOf(tide.Feet[i])), High = tide.High[i], Past = tide.Times[i] < now,
-                                         Text = tide.Times[i].ToLocalTime().ToString("t", CultureInfo.CurrentCulture).ToUpperInvariant() });
-            }
-            marks.Sort((a, b) => a.Past != b.Past ? (a.Past ? 1 : -1) : a.At.X.CompareTo(b.At.X));
-            float space = st(7);
-            List<RectangleF> written = new List<RectangleF>();
-            foreach (TideMark k in marks)
-            {
-                float w = Measure(m, k.Text, f.Font, track);
-                k.X = (float)Math.Round(Math.Max(t.Panel.Left + padX, Math.Min(t.Panel.Right - padX - w, k.At.X - w / 2f)));
-                k.Baseline = top + (k.High ? highBase : lowBase);
-                RectangleF r = new RectangleF(k.X - space / 2f, k.Baseline - cap, w + space, cap);   // keeps times space apart
-                if (written.Exists(o => o.IntersectsWith(r))) continue;
-                written.Add(r);
-                t.Marks.Add(k);
-            }
 
             L.MapTide = t;
             taken.Add(t.Panel);
-            long tenMinutes = now.Ticks / TimeSpan.TicksPerMinute / stepMin;   // the curve moves on with time
-            return tide.Id + " " + tenMinutes.ToString(CultureInfo.InvariantCulture) + " " + t.Title + " " +
-                   left.ToString("0", CultureInfo.InvariantCulture) + "," + panelH.ToString("0", CultureInfo.InvariantCulture);
+            StringBuilder key = new StringBuilder(tide.Id);
+            key.Append(' ').Append((now.Ticks / TimeSpan.TicksPerMinute / stepMin).ToString(CultureInfo.InvariantCulture));   // the curve moves on
+            foreach (TideRow r in t.Rows) key.Append('|').Append(r.Label).Append(' ').Append(r.Time).Append(' ').Append(r.Height).Append(' ').Append(r.Change);
+            return key.Append('|').Append(left.ToString("0", CultureInfo.InvariantCulture)).ToString();
+        }
+
+        /// <summary>Feet to one decimal with a real minus sign, and a plus sign when asked: "6.3", "−0.2", "+5.7".</summary>
+        internal static string Feet(double feet, bool signed)
+        {
+            double r = Math.Round(feet, 1);
+            string s = Math.Abs(r).ToString("0.0", CultureInfo.InvariantCulture);
+            return r < 0 ? "\u2212" + s : signed ? "+" + s : s;
         }
 
         public const int VeilMs = 300;
@@ -924,61 +926,53 @@ namespace ClaudeCurtain
         }
 
         /// <summary>
-        /// The tide inset: a dark ground, its title over a hairline, the day's tide as a line over a soft fill
-        /// (the hours gone fainter than the coming ones), the highs and lows with their times, and now as a dot
-        /// on the curve with a hairline down to the baseline.
+        /// The tide inset: a dark ground, and the table: labels in the label tone, times and changes in the
+        /// body tone, heights brightest; in the first row the day's curve, drawn like the system graphs (the
+        /// hours gone fainter than the coming ones, now a bright dot).
         /// </summary>
         private static void DrawTide(Graphics og, Layout l, TideChart t)
         {
-            Face f = l.Label;
+            Face fl = l.Label, fs = l.Small;
             using (SolidBrush ground = new SolidBrush(Color.FromArgb(200, 0, 0, 0)))
                 og.FillRectangle(ground, t.Panel);
-            float titleTop = (float)Math.Round(t.TitleBaseline - f.Ascent);
-            DrawText(og, t.Title, f.Font, Tertiary, t.Plot.Left, titleTop, l.Track, 0);
-            using (SolidBrush rule = new SolidBrush(RuleColor)) og.FillRectangle(rule, t.Plot.Left, (float)Math.Round(t.RuleY), t.Plot.Width, 1);
+            foreach (TideRow r in t.Rows)
+            {
+                float top = (float)Math.Round(r.Baseline - fs.Ascent);
+                DrawText(og, r.Label, fl.Font, Tertiary, (float)Math.Round(t.LabelX), (float)Math.Round(r.Baseline - fl.Ascent), l.Track, 0);
+                DrawText(og, r.Time, fs.Font, Secondary, (float)Math.Round(t.TimeRight - Measure(og, r.Time, fs.Font, 0)), top, 0, 0);
+                DrawText(og, r.Height, fs.Font, Primary, (float)Math.Round(t.HeightRight - Measure(og, r.Height, fs.Font, 0)), top, 0, 0);
+                DrawText(og, r.Change, fs.Font, Secondary, (float)Math.Round(t.ChangeRight - Measure(og, r.Change, fs.Font, 0)), top, 0, 0);
+            }
 
+            RectangleF sp = t.Spark;
+            using (Pen axis = new Pen(Track, 1f)) og.DrawLine(axis, sp.Left, (float)Math.Round(sp.Bottom) + 0.5f, sp.Right, (float)Math.Round(sp.Bottom) + 0.5f);
             PointF[] past = new PointF[t.Now + 1], coming = new PointF[t.Curve.Length - t.Now];
             Array.Copy(t.Curve, 0, past, 0, past.Length);
             Array.Copy(t.Curve, t.Now, coming, 0, coming.Length);
-            float baseY = t.Plot.Bottom;
-            FillUnder(og, past, t.Plot.Top, baseY, 0.5f);
-            FillUnder(og, coming, t.Plot.Top, baseY, 1f);
-            using (Pen axis = new Pen(Track, 1f)) og.DrawLine(axis, t.Plot.Left, baseY + 0.5f, t.Plot.Right, baseY + 0.5f);
+            FillUnder(og, past, sp.Bottom, Color.FromArgb(23, Secondary));
+            FillUnder(og, coming, sp.Bottom, Color.FromArgb(46, Secondary));
             float lw = Math.Max(1.5f, l.Unit / 80f);
             using (Pen line = new Pen(Tertiary, lw) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round })
                 og.DrawLines(line, past);
             using (Pen line = new Pen(Secondary, lw) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round })
                 og.DrawLines(line, coming);
-
-            float md = Math.Max(4f, l.Unit / 32f);
-            foreach (TideMark k in t.Marks)
-            {
-                Color c = k.Past ? Tertiary : Secondary;
-                using (SolidBrush b = new SolidBrush(c)) og.FillEllipse(b, k.At.X - md / 2f, k.At.Y - md / 2f, md, md);
-                DrawText(og, k.Text, f.Font, c, k.X, (float)Math.Round(k.Baseline - f.Ascent), l.Track, 0);
-            }
-
             PointF p = t.Curve[t.Now];
-            using (Pen hair = new Pen(Color.FromArgb(110, Hero), 1f)) og.DrawLine(hair, p.X, p.Y, p.X, baseY);
-            float d = Math.Max(6f, l.Unit / 18f);
+            float d = Math.Max(5f, l.Unit / 20f);
             using (SolidBrush ring = new SolidBrush(Color.Black))
                 og.FillEllipse(ring, p.X - d / 2f - lw, p.Y - d / 2f - lw, d + 2 * lw, d + 2 * lw);
             using (SolidBrush dot = new SolidBrush(Hero))
                 og.FillEllipse(dot, p.X - d / 2f, p.Y - d / 2f, d, d);
         }
 
-        /// <summary>The area under a curve down to a baseline, in the chart tone, strongest at the top.</summary>
-        private static void FillUnder(Graphics g, PointF[] pts, float top, float baseY, float strength)
+        /// <summary>The area under a curve down to a baseline.</summary>
+        private static void FillUnder(Graphics g, PointF[] pts, float baseY, Color c)
         {
             if (pts.Length < 2) return;
             PointF[] poly = new PointF[pts.Length + 2];
             Array.Copy(pts, poly, pts.Length);
             poly[pts.Length] = new PointF(pts[pts.Length - 1].X, baseY);
             poly[pts.Length + 1] = new PointF(pts[0].X, baseY);
-            using (LinearGradientBrush b = new LinearGradientBrush(new PointF(0, top - 1), new PointF(0, baseY + 1),
-                                                                   Color.FromArgb((int)(80 * strength), Secondary),
-                                                                   Color.FromArgb((int)(16 * strength), Secondary)))
-                g.FillPolygon(b, poly);
+            using (SolidBrush b = new SolidBrush(c)) g.FillPolygon(b, poly);
         }
 
         /// <summary>Text as a shape with a dark outline under it, so it reads over cloud and rain.</summary>

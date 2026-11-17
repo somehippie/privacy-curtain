@@ -772,14 +772,18 @@ namespace ClaudeCurtain
                       l.MapStations.Count >= 4 && l.MapStations.Exists(p => WeatherMap.Windy(p.Station)) && tc != null && apart);
                 if (tc != null)
                 {
-                    float nowX = tc.Plot.Left + tc.Plot.Width * CurtainPainter.TidePastHours / CurtainPainter.TideHours;
+                    // The sample's tide: a low of 0.6 ft 4.2 hours ago, a high of 6.3 ft in 2.1 hours, a low of 2.1 ft after it.
+                    float nowX = tc.Spark.Left + tc.Spark.Width * CurtainPainter.TidePastHours / CurtainPainter.TideHours;
                     bool corner = tc.Panel.Top > 0 && tc.Panel.Right < l.Map.Width && tc.Panel.Left > l.Map.Width / 2f && tc.Panel.Bottom < l.Map.Height / 2f;
-                    bool written = tc.Marks.Count == 3 && tc.Marks.TrueForAll(k =>
-                        (k.High ? k.Baseline < tc.Plot.Top : k.Baseline - l.Label.CapHeight > tc.Plot.Bottom) &&
-                        k.X >= tc.Panel.Left && k.X + 10 <= tc.Panel.Right && !k.Past);
-                    Check("tide: the sample's inset takes the top right corner, \"TIDE · RISING\", now a sixth of the way along the day, highs' times above the curve and lows' below",
-                          corner && tc.Title.StartsWith("TIDE", StringComparison.Ordinal) && tc.Title.EndsWith("RISING", StringComparison.Ordinal) &&
-                          Math.Abs(tc.Curve[tc.Now].X - nowX) < 0.5f && written && tc.Marks.FindAll(k => k.High).Count == 2);
+                    bool rows = tc.Rows.Count == 3 &&
+                                tc.Rows[0].Label == "TIDE" && tc.Rows[0].Height == "4.9 ft" && tc.Rows[0].Change == "\u2191" && tc.Rows[0].Time == "" &&
+                                tc.Rows[1].Label == "HIGH" && tc.Rows[1].Height == "6.3 ft" && tc.Rows[1].Change == "+5.7" && tc.Rows[1].Time.Length > 0 &&
+                                tc.Rows[2].Label == "LOW" && tc.Rows[2].Height == "2.1 ft" && tc.Rows[2].Change == "\u22124.2";
+                    bool inside = tc.LabelX > tc.Panel.Left && tc.ChangeRight < tc.Panel.Right && tc.Spark.Top > tc.Panel.Top &&
+                                  tc.Rows[2].Baseline < tc.Panel.Bottom && tc.Spark.Right <= tc.HeightRight - 10;
+                    Check("tide: the sample's table sits in the top right corner: now (4.9 ft, rising, the day's curve), then the next high and low with times, heights and changes (+5.7, \u22124.2)",
+                          corner && rows && inside && Math.Abs(tc.Curve[tc.Now].X - nowX) < 0.5f &&
+                          CurtainPainter.Feet(-0.04, false) == "0.0" && CurtainPainter.Feet(-0.2, false) == "\u22120.2");
 
                     // Two more temperatures under that corner: now the west one hides fewer, so the inset moves there.
                     DisplayState busy = CurtainPreview.Sample(po, "idle");
