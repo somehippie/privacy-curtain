@@ -10,6 +10,12 @@ Awareness, not lockout: it counts and logs every blocked key press, click and es
 phone while someone is at the keyboard, and shows a "While you were away" summary when you unlock. The
 screen itself is designed as carefully as the safety: see [Design](#design).
 
+You raise it from a desktop shortcut, with a dialog in the same design: how many hours, when it will
+close, and whether to open Claude Code with Remote Control first, so the PC stays reachable from your
+phone while the screen is dark ([how to make the shortcut](#use)).
+
+![The launcher's dialog: RAISE THE CURTAIN, 8 hours with minus and plus, the time it will close, presets from 1 to 24 hours, the Remote Control switch with its note, and the Cancel and Raise curtain buttons](docs/launch.png)
+
 No installs, no administrator rights, nothing that survives a reboot. It compiles with the C# compiler that
 already ships inside Windows (.NET Framework 4).
 
@@ -77,8 +83,6 @@ hours, at most 24 (`-Hours 24` for a full day).
 > each running session in `~\.claude\sessions`.) Then it raises the curtain with no console window.
 > Digits and the arrow keys set the hours, Tab moves, Space flips the switch, Enter raises, Esc cancels.
 > Remote Control is best-effort: if it cannot start, the curtain still goes up.
->
-> ![The launcher's dialog: RAISE THE CURTAIN, 8 hours with minus and plus, the time it will close, presets from 1 to 24 hours, the Remote Control switch with its note, and the Cancel and Raise curtain buttons](docs/launch.png)
 
 ## Ways back in
 
