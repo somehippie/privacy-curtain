@@ -319,9 +319,10 @@ namespace ClaudeCurtain
             string[] states = { "idle", "typing", "wrong", "cooldown", "admin", "bright", "night", "clouds" };
             bool allFit = true, allOnScreen = true, columnsGolden = true, mapPlaced = true, headsShared = true;
             string worst = "", mapWorst = "", headsWorst = "";
-            long slowestMs = 0;
+            long slowestMs = 0, firstMs = 0;   // re-renders; the first at each size, which also draws the map's ground
             foreach (Size scr in screens)
             {
+                bool firstAtSize = true;
                 foreach (string state in states)
                 {
                     Options po = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir"), TestState = state };
@@ -331,7 +332,9 @@ namespace ClaudeCurtain
                     sw.Stop();
                     try
                     {
-                        slowestMs = Math.Max(slowestMs, sw.ElapsedMilliseconds);
+                        if (firstAtSize) firstMs = Math.Max(firstMs, sw.ElapsedMilliseconds);
+                        else slowestMs = Math.Max(slowestMs, sw.ElapsedMilliseconds);
+                        firstAtSize = false;
                         Bitmap b = l == null ? null : l.Block;
                         if (b == null || b.Width > scr.Width * CurtainPainter.MaxWidthShare + 1 || b.Height > scr.Height * CurtainPainter.MaxHeightShare + 1)
                         {
@@ -386,11 +389,12 @@ namespace ClaudeCurtain
                     }
                 }
             }
-            lines.Add("INFO  slowest curtain render: " + slowestMs + " ms");
+            lines.Add("INFO  slowest curtain render: " + slowestMs + " ms (the first at a new size: " + firstMs + " ms)");
             Check("painter: every state fits 720p, 1080p, 16:10, 1440p, ultrawide and portrait screens" + (allFit ? "" : " (" + worst + ")"), allFit);
             Check("painter: on landscape screens the two columns are exactly phi : 1" + (columnsGolden ? "" : " (" + worst + ")"), columnsGolden);
             Check("painter: the drift keeps everything on screen for 8 hours" + (allOnScreen ? "" : " (" + worst + ")"), allOnScreen);
-            Check("painter: a re-render takes under 150 ms", slowestMs < 150);
+            Check("painter: a re-render takes under 150 ms (the first at a new screen size, which draws the map's ground, under 400 ms)",
+                  slowestMs < 150 && firstMs < 400);
             Check("map: sits in the left column under its header, clear of the message, with the PIN row in its lowest band" +
                   (mapPlaced ? "" : " (" + mapWorst + ")"), mapPlaced);
             Check("painter: beside the map, the forecast's header and rule share the map's line" +
@@ -506,7 +510,7 @@ namespace ClaudeCurtain
                     int cx0 = Math.Max(0, (int)(clockLayout.OriginX + clockLayout.LeftCol.Left));
                     int cx1 = Math.Min(clockW, (int)(clockLayout.OriginX + clockLayout.LeftCol.Right));
                     float clockBase = 0;
-                    foreach (KeyValuePair<string, float> b in clockLayout.Baselines) if (b.Key == "C") { clockBase = b.Value; break; }
+                    foreach (KeyValuePair<string, float> b in clockLayout.Baselines) if (b.Key == CurtainPainter.ClockLabel) { clockBase = b.Value; break; }
                     int cy0 = Math.Max(0, (int)clockLayout.OriginY);
                     int cy1 = Math.Min(clockLayout.Block.Height, (int)(clockLayout.OriginY + clockBase));
                     for (int cy = cy0; cy < cy1; cy++)       // the band of the digits (and AM/PM): nothing else is there
@@ -521,6 +525,15 @@ namespace ClaudeCurtain
             }
             lines.Add("INFO  the clock's brightest red: " + clockSeen + " (the time " + CurtainPainter.Time.R + ", hero " + CurtainPainter.Hero.R + ")");
             Check("colour: the clock is painted in its own tone, a step under hero, and dims overnight", clockTone);
+
+            // Beside the map the block takes all the height it may, so the map gets it; the clock is half a step down.
+            using (CurtainPainter.Layout fill = CurtainPainter.Compose(CurtainPreview.Sample(new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir"), TestState = "idle" }), 2560, 1440))
+            {
+                float allowed = 1440 * CurtainPainter.MaxHeightShare;
+                lines.Add("INFO  at 1440p: block " + fill.Block.Width + "x" + fill.Block.Height + ", map " + fill.Map.Width + "x" + fill.Map.Height);
+                Check("painter: beside the map the block takes the height it may (the map gets it), with the clock half a step down the scale",
+                      !fill.Map.IsEmpty && fill.Block.Height <= allowed + 1 && fill.Block.Height >= allowed - 8 && CurtainPainter.ClockStep == 0.5);
+            }
 
             // Motion: the animations run with a fixed clock, start fast frames, and settle again.
             using (Bitmap canvas = new Bitmap(1280, 720))
@@ -805,6 +818,19 @@ namespace ClaudeCurtain
                 Check("map: wind reads as the forecast writes it, gusts as a range, and is labelled from 10 mph",
                       WeatherMap.WindText(sx.Stations[0]) == "14–22 mph" && WeatherMap.WindText(new MapStation { WindMph = 12, GustMph = 15 }) == "12 mph" &&
                       WeatherMap.Windy(sx.Stations[0]) && !WeatherMap.Windy(new MapStation { WindMph = 9 }));
+            }
+
+            // Rivers and lakes: map.txt names the hydrography mask; zoom 10 elevation spans up to 16 tiles a side; the
+            // mask only ever adds water (a channel the land and water map lacks), never takes any away.
+            {
+                WeatherMap.Index wx = WeatherMap.Index.Parse(new[] { "box 44.4 -123.5 45.6 -120.5", "base b.png", "water w.png", "dem 10 160 393 170 398" });
+                WeatherMap.Index bad = WeatherMap.Index.Parse(new[] { "box 44.4 -123.5 45.6 -120.5", "base b.png", "water ..\\w.png", "dem 10 160 393 180 398" });
+                byte[] water = { 0, 0, 255, 255, 0, 0 };   // 3 x 2: the land and water map's water on the right
+                int clear = 0, blue = unchecked((int)0xFF0000FF), half = unchecked((int)0x800000FF), red = unchecked((int)0xFFFF0000);
+                WeatherMap.MergeWater(water, 3, 2, new[] { clear, blue, clear, half, half, red }, 3, 2);
+                Check("map: the rivers and lakes mask is named in map.txt and only adds water (a channel, a lake's soft edge), never removes it",
+                      wx.Water == "w.png" && wx.DemZoom == 10 && wx.DemX1 == 170 && bad.Water == null && bad.DemZoom == -1 &&
+                      water[0] == 0 && water[1] == 255 && water[2] == 255 && water[3] == 255 && water[4] == 128 && water[5] == 0);
             }
 
             // Elevation: terrarium pixels to metres, tiles found and stitched in the right places.

@@ -160,8 +160,8 @@ them together stay under about 1.8 MB, and the weather map's files under another
 | `curtain.log` (diagnostics) | 512 KB, trimmed to the newest 128 KB | weeks |
 | `alerts.log` | 256 KB, trimmed to the newest 160 KB | thousands of alerts |
 | `last-summary.txt`, `last-summary-timeline.txt`, `last-exit.json`, `weather.txt`, `weather-hourly.txt` | one small file each, overwritten (the timeline holds at most 5,000 moments, about 60 KB) | the last run only |
-| `map.txt`, `map-base-*.png`, `radar-*.png`, `sat-*.jpg` (the weather map) | the last hour of pictures (about 8 radar, 7 satellite) and one land and water map; older pictures are deleted at each refresh | the last hour |
-| `dem-*.png`, `tide-station.txt` (the map's relief and tide) | the elevation tiles over the map's area (about 1.6 MB) and one line naming the tide station, fetched once per place; tiles for another place are deleted | as long as the place stays the same |
+| `map.txt`, `map-base-*.png`, `map-water-*.png`, `radar-*.png`, `sat-*.jpg` (the weather map) | the last hour of pictures (about 8 radar, 7 satellite), one land and water map and one of rivers and lakes; older pictures are deleted at each refresh | the last hour |
+| `dem-*.png`, `tide-station.txt` (the map's relief and tide) | the elevation tiles over the map's area (about 7 MB) and one line naming the tide station, fetched once per place; tiles for another place are deleted | as long as the place stays the same |
 | `test\report-*.txt` | the 10 newest are kept | the last 10 test runs |
 
 Your own unlock is not counted as someone at the keyboard. The key presses of the PIN entry that unlocked
@@ -195,7 +195,7 @@ A screen that stays up for hours in a shared room should be calm, legible from a
 about what it is doing. Everything on it comes from one proportional system built on the golden ratio,
 φ ≈ 1.618, and the curtain can draw that system on top of itself:
 
-![The curtain with its construction drawn on top: the two columns in the ratio φ : 1, the margins above and below in the ratio 1 : φ, and each text size labelled as the clock size over a power of φ](docs/construction.png)
+![The curtain with its construction drawn on top: the two columns in the ratio φ : 1, the margins above and below in the ratio 1 : φ, and each text size labelled as C, the scale's base, over a power of φ](docs/construction.png)
 
 - **Grid.** On a landscape screen the composition is two columns in the ratio φ : 1: the time, the
   weather map and the message on the left, live data on the right, a hairline between them. Both columns share a top edge
@@ -212,8 +212,8 @@ about what it is doing. Everything on it comes from one proportional system buil
   composition; the self-tests prove it by laying out wildly different readings, times and forecasts and
   requiring the same frame to the pixel.
 - **Type.** One family, Bahnschrift, a DIN design that ships with Windows, from Light for the clock to
-  Regular for data. Every size is the clock size divided by a power of φ, and every gap is a step on the
-  same scale. Large type is aligned by its ink rather than its side bearing, the colon is lifted to the
+  Regular for data. Every size is C, the scale's base, divided by a power of φ, and every gap is a step
+  on the same scale; the clock itself is C/√φ, half a step down, so the map gets the room. Large type is aligned by its ink rather than its side bearing, the colon is lifted to the
   optical centre of the digits, AM/PM hangs small at cap height, and small capitals are letter-spaced.
   Forecast text is set in sentence case. The message is set small (its title C/φ⁵, its two lines C/φ⁶,
   the accent rule nearer the title than the map), so the map gets the height.
@@ -228,7 +228,8 @@ about what it is doing. Everything on it comes from one proportional system buil
 - **The weather map.** Under the date, as wide as the clock, with a header ruled like the data column's
   sections ("RADAR · PAST HOUR", the picture's time at the right). On a landscape screen the data column
   decides where the message sits, so the map fills space that was empty and moves nothing else; its header
-  shares a line with the forecast's, which gives it the room the forecast takes below that line. It shows
+  shares a line with the forecast's, which gives it the room the forecast takes below that line, and the
+  composition takes all the height it may, the forecast's chart and gaps stretching by as much. It shows
   135 km top to bottom, as a golden rectangle where the screen has room for one, with home as a small
   accent-coloured dot on the golden section across and 7/10 of the way down, so the larger parts of the
   map lie to the west, where weather usually comes from, and to the north. It is drawn
@@ -237,7 +238,9 @@ about what it is doing. Everything on it comes from one proportional system buil
   the data hue from quiet to bright as it gets heavier (amber when heavy, coral when severe, with a
   five-step legend), clouds and fog in warm white, never brighter than the body text, so the clock stays
   the brightest thing on screen. Under the weather the land's relief stays ground rather than picture: lit
-  slopes, a faint warm tint on high ground and hairline contours every 200 m, like a topographic print.
+  slopes, a faint warm tint on high ground and hairline contours every 100 m, with a stronger one every
+  500 m, like a topographic print. The water includes the rivers, canals, lakes and reservoirs, not only
+  the coast.
   Over it, a few labels with a dark halo: station temperatures spread across the map, and wind only where
   it is notable. The tide has a small table in one of the top corners, set a half step under the map's
   other labels so it hides little of the map, with what a fisherman or a surfer looks for:
@@ -328,14 +331,19 @@ And in the left column:
   satellite pictures through nowCOAST, every 5 minutes: visible by day (half-kilometre detail, enough to
   watch coastal fog move; evened out when the sun is low), infrared at night (it shows cloud, but fog and
   low stratus are close to the ground's temperature, so they barely show at night). Land and water come
-  from NASA GIBS's map made from OpenStreetMap, fetched once (map data © OpenStreetMap contributors).
+  from NASA GIBS's map made from OpenStreetMap, fetched once (map data © OpenStreetMap contributors),
+  with the rivers, canals, lakes, reservoirs and estuaries of the USGS National Hydrography Dataset added,
+  from its map service, fetched once per place: a request for the same rounded box, drawn as plain fill
+  without the service's outlines, names, marsh or ponds under 0.2 km². It covers the United States.
 
   Under the weather, the **relief**: the land's shape from AWS Terrain Tiles (in the United States, USGS
-  3DEP elevation; about 240 m a cell, 15 tiles fetched once per place). Hills are lit from the north-west,
-  heights exaggerated 2.4 times so gentle ranges still read at this scale, and softened slightly so the
-  coarse tiles don't look grainy. Black can't be darkened, so lit slopes brighten and high ground takes a
-  faint warm tint while valleys stay black. A hairline contour every 200 m is drawn per pixel from height
-  and slope (no tracing), so the lines stay smooth at any screen size.
+  3DEP elevation; about 120 m a cell at zoom 10, about 70 tiles, 7 MB, fetched once per place), sampled
+  four times a screen pixel and softened by only a pixel, so ridges and valleys stay crisp. Hills are lit
+  from the north-west, heights exaggerated 2.4 times so gentle ranges still read at this scale. Black can't
+  be darkened, so lit slopes brighten and high ground takes a faint warm tint while valleys stay black. A
+  hairline contour every 100 m and a stronger one every 500 m are drawn per pixel from height and slope
+  (no tracing), so the lines stay smooth at any screen size; where a slope packs the 100 m lines closer
+  than about three pixels they fade, so steep ground keeps only its 500 m lines.
 
   Over it, small labels with a dark halo so they read over cloud and rain:
 
@@ -398,7 +406,7 @@ Please read these before relying on the curtain.
 ```
 
 They use a throwaway PIN in `local\test` and never touch the real one, and they never call your notify
-hook. The self-tests (~126 checks, including PIN hashing/entry rules, which key presses belong to your own
+hook. The self-tests (~127 checks, including PIN hashing/entry rules, which key presses belong to your own
 unlock, the time-zone label, the stats sampler, weather-file reading, and the design: every state rendered
 at 720p, 1080p, 16:10, 1440p, ultrawide and portrait, fitting the screen, the columns exactly φ : 1, the
 forecast's header on the map's line,
@@ -437,8 +445,8 @@ runs.
 Set in Bahnschrift (Microsoft, after DIN 1451). Grid, type scale, margins and drift all derive from the
 golden ratio. Drawn with GDI+ from the C# compiler inside Windows, with no external assets: the weather
 symbols, sparklines and bars are all code, and the map is drawn pixel by pixel from NOAA's radar,
-satellite, station and tide numbers, over relief from USGS elevation (AWS Terrain Tiles) and a land and
-water map from NASA GIBS (© OpenStreetMap contributors). Designed, built and tested with
+satellite, station and tide numbers, over relief from USGS elevation (AWS Terrain Tiles), a land and
+water map from NASA GIBS (© OpenStreetMap contributors) and the USGS National Hydrography Dataset. Designed, built and tested with
 [Claude Code](https://claude.com/claude-code).
 
 ## License

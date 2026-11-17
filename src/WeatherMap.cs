@@ -145,6 +145,7 @@ namespace ClaudeCurtain
             public GeoBox Box;
             public bool HasBox;
             public string Base;
+            public string Water;      // the rivers, canals and lakes, on the base map's grid (optional)
             public string Credit = "";
             public readonly List<KeyValuePair<DateTime, string>> Radar = new List<KeyValuePair<DateTime, string>>();
             public readonly List<KeyValuePair<DateTime, string>> Sat = new List<KeyValuePair<DateTime, string>>();
@@ -178,6 +179,9 @@ namespace ClaudeCurtain
                         case "base":
                             if (p.Length == 2 && PlainName(p[1])) ix.Base = p[1];
                             break;
+                        case "water":
+                            if (p.Length == 2 && PlainName(p[1])) ix.Water = p[1];
+                            break;
                         case "radar":
                             if (p.Length == 3 && Utc(p[1], out t) && PlainName(p[2])) ix.Radar.Add(new KeyValuePair<DateTime, string>(t, p[2]));
                             break;
@@ -199,7 +203,7 @@ namespace ClaudeCurtain
                         case "dem":
                             int z, x0, y0, x1, y1;
                             if (p.Length == 6 && Whole(p[1], 1, 14, out z) && Whole(p[2], 0, 1 << 14, out x0) && Whole(p[3], 0, 1 << 14, out y0) &&
-                                Whole(p[4], x0, x0 + 9, out x1) && Whole(p[5], y0, y0 + 9, out y1))
+                                Whole(p[4], x0, x0 + 15, out x1) && Whole(p[5], y0, y0 + 15, out y1))
                             {
                                 ix.DemZoom = z; ix.DemX0 = x0; ix.DemY0 = y0; ix.DemX1 = x1; ix.DemY1 = y1;
                             }
@@ -299,6 +303,15 @@ namespace ClaudeCurtain
                 m.BaseW = w; m.BaseH = h;
                 m.Water = WaterFrom(px);
                 m.BaseId = ix.Base + "@" + File.GetLastWriteTimeUtc(Path.Combine(dir, ix.Base)).Ticks.ToString(CultureInfo.InvariantCulture);
+                // The rivers, canals and lakes join the land and water map's water: a river delta's channels and the
+                // reservoirs in the hills come from there. Without them the map is as it was.
+                int[] wpx;
+                int ww, wh;
+                if (ix.Water != null && ReadPixels(Path.Combine(dir, ix.Water), out wpx, out ww, out wh))
+                {
+                    MergeWater(m.Water, w, h, wpx, ww, wh);
+                    m.BaseId += "|" + ix.Water + "@" + File.GetLastWriteTimeUtc(Path.Combine(dir, ix.Water)).Ticks.ToString(CultureInfo.InvariantCulture);
+                }
 
                 List<MapFrame> radar = new List<MapFrame>(), sat = new List<MapFrame>();
                 foreach (KeyValuePair<DateTime, string> e in ix.Radar)
@@ -331,7 +344,8 @@ namespace ClaudeCurtain
 
         /// <summary>
         /// Stitches the elevation tiles (AWS Terrain Tiles, "terrarium" PNGs in Web Mercator) into a grid over the
-        /// box, 0.0025 degree a cell. Leaves Elevation null when a tile is missing: no relief rather than a hole.
+        /// box at about the tiles' own resolution (0.00125 degree a cell from zoom 10, 0.0025 below). Leaves
+        /// Elevation null when a tile is missing: no relief rather than a hole.
         /// </summary>
         private static void LoadDem(WeatherMap m, string dir, Index ix)
         {
@@ -378,8 +392,9 @@ namespace ClaudeCurtain
 
         internal static float[] StitchDem(float[][] tiles, int z, int x0, int y0, int nx, int ny, GeoBox box, out int w, out int h)
         {
-            w = Math.Max(2, Math.Min(2400, (int)Math.Round((box.East - box.West) / 0.0025)));
-            h = Math.Max(2, Math.Min(1200, (int)Math.Round((box.North - box.South) / 0.0025)));
+            double cell = z >= 10 ? 0.00125 : 0.0025;   // about the tiles' own resolution
+            w = Math.Max(2, Math.Min(4096, (int)Math.Round((box.East - box.West) / cell)));
+            h = Math.Max(2, Math.Min(2048, (int)Math.Round((box.North - box.South) / cell)));
             double[] gxs = new double[w], gys = new double[h];
             double unused;
             for (int x = 0; x < w; x++)
@@ -570,6 +585,25 @@ namespace ClaudeCurtain
                 w[i] = (byte)(v < 0 ? 0 : (v > 255 ? 255 : v));
             }
             return w;
+        }
+
+        /// <summary>
+        /// Adds the hydrography mask (USGS, water drawn opaque on a transparent ground; edges partly opaque) to the
+        /// water: the larger of the two at each cell. The mask is read at the base grid's cells, whatever its size.
+        /// </summary>
+        internal static void MergeWater(byte[] water, int w, int h, int[] px, int pw, int ph)
+        {
+            if (water == null || px == null || w <= 0 || h <= 0 || pw <= 0 || ph <= 0 || px.Length < pw * ph) return;
+            for (int y = 0; y < h; y++)
+            {
+                int sy = Math.Min(ph - 1, (int)((y + 0.5) * ph / h));
+                for (int x = 0; x < w; x++)
+                {
+                    int c = px[sy * pw + Math.Min(pw - 1, (int)((x + 0.5) * pw / w))];
+                    int a = (c >> 24) & 255, b = c & 255, r = (c >> 16) & 255;
+                    if (a > 0 && b > r && a > water[y * w + x]) water[y * w + x] = (byte)a;   // blue only: water
+                }
+            }
         }
 
         /// <summary>A satellite picture: grey levels (both kinds come with bright = cloud).</summary>
@@ -1041,7 +1075,7 @@ namespace ClaudeCurtain
 
         private static Entry Get(WeatherMap m, GeoBox crop, int w, int h)
         {
-            string key = m.BaseId + "|" + m.Box + "|" + crop + "|" + w + "x" + h;
+            string key = m.BaseId + "|" + m.DemId + "|" + m.Box + "|" + crop + "|" + w + "x" + h;
             foreach (Entry e in entries)
             {
                 if (e.Key == key) { e.Used = ++clock; return e; }
@@ -1169,8 +1203,9 @@ namespace ClaudeCurtain
         ///   Relief    hills lit from the north-west (the cartographer's convention), heights exaggerated a
         ///             little, so the ranges read at a glance; black can't be darkened, so slopes facing the
         ///             light brighten and high ground takes a faint warm tint, and valleys stay black.
-        ///   Contours  a hairline every 200 m, drawn per pixel from the height and its slope, so the lines are
-        ///             smooth at any size without tracing them.
+        ///   Contours  a hairline every 100 m and a stronger one every 500 m, drawn per pixel from the height and
+        ///             its slope, so the lines are smooth at any size without tracing them; where a slope packs
+        ///             the 100 m lines too close they fade, and steep ground keeps its 500 m lines.
         /// </summary>
         private static void RenderBase(WeatherMap m, GeoBox crop, int w, int h, out Bitmap ground, out Bitmap shore)
         {
@@ -1191,15 +1226,25 @@ namespace ClaudeCurtain
             float[] elev = null;
             if (m.Elevation != null && m.DemW > 1 && m.DemH > 1)
             {
-                float[] ex, ey;
-                Mapping(m.Box, crop, w, h, m.DemW, m.DemH, 0.5f, out ex, out ey);
+                // A grid finer than the screen (zoom 10 tiles) is sampled four times a pixel, so it gives its detail
+                // without aliasing its ridges; a coarser one once, at the pixel's centre.
+                float[] dem = m.Elevation;
+                int dw = m.DemW, dh = m.DemH;
+                bool fine = m.Box.KmWide / dw < crop.KmWide / w * 0.8;
+                float[] ex0, ey0, ex1, ey1;
+                Mapping(m.Box, crop, w, h, dw, dh, fine ? 0.25f : 0.5f, out ex0, out ey0);
+                Mapping(m.Box, crop, w, h, dw, dh, 0.75f, out ex1, out ey1);
                 elev = new float[w * h];
                 for (int y = 0; y < h; y++)
                     for (int x = 0; x < w; x++)
-                        elev[y * w + x] = BilinearF(m.Elevation, m.DemW, m.DemH, ex[x], ey[y]);
-                // Softened a little (two box passes, close to a Gaussian): the tiles are coarser than the screen,
-                // and their noise would otherwise make the shading grainy and the contours scratchy.
-                int radius = Math.Max(1, (int)Math.Round(w / 360.0));
+                        elev[y * w + x] = fine
+                            ? 0.25f * (BilinearF(dem, dw, dh, ex0[x], ey0[y]) + BilinearF(dem, dw, dh, ex1[x], ey0[y]) +
+                                       BilinearF(dem, dw, dh, ex0[x], ey1[y]) + BilinearF(dem, dw, dh, ex1[x], ey1[y]))
+                            : BilinearF(dem, dw, dh, ex0[x], ey0[y]);
+                // Then softened with two box passes (close to a Gaussian): of a pixel for the fine grid, which keeps
+                // ridges and valleys crisp and takes out only gully-sized grain; wider for a grid as coarse as the
+                // screen, whose noise would otherwise make the shading grainy and the contours scratchy.
+                int radius = fine ? 1 : Math.Max(1, (int)Math.Round(w / 360.0));
                 for (int pass = 0; pass < 2; pass++) elev = BoxBlur(elev, w, h, radius);
             }
             double mx = crop.KmWide * 1000.0 / w, my = crop.KmTall * 1000.0 / h;   // metres a pixel
@@ -1226,12 +1271,18 @@ namespace ClaudeCurtain
                         double high = SmoothD(e0 / 1300.0);
                         float level = (float)(0.13 * high + 0.55 * Math.Min(1, lit * 1.6) * (0.3 + 0.7 * Math.Sqrt(high)));
                         r = ReliefTone.R * level; g = ReliefTone.G * level; b = ReliefTone.B * level;
-                        // a contour where the height crosses a 200 m level, about a pixel wide whatever the slope
+                        // a contour where the height crosses a 100 m level, about a pixel wide whatever the slope;
+                        // every fifth (500 m) a little stronger, and where a slope packs the 100 m ones closer than
+                        // about three pixels they fade out, so steep ground keeps only its 500 m lines
                         float slope = (float)Math.Sqrt(dE * dE + dN * dN) / 2f;   // metres a pixel
                         if (e0 > ContourMetres * 0.5f && slope > 0.5f)
                         {
-                            float off = Math.Abs(e0 - (float)Math.Round(e0 / ContourMetres) * ContourMetres) / slope;
-                            float a = (1 - off / 0.85f) * ContourStrength * Math.Min(1f, land * 1.5f);
+                            float n = (float)Math.Round(e0 / ContourMetres);
+                            bool index = (int)n % ContourIndexEvery == 0;
+                            float off = Math.Abs(e0 - n * ContourMetres) / slope;
+                            float spacing = ContourMetres * (index ? ContourIndexEvery : 1) / slope;   // pixels to the next such line
+                            float room = Math.Max(0f, Math.Min(1f, (spacing - 2.5f) / 2.5f));
+                            float a = (1 - off / 0.85f) * (index ? ContourIndexStrength : ContourStrength) * room * Math.Min(1f, land * 1.5f);
                             if (a > 0)
                             {
                                 r += (ContourTone.R - r) * a; g += (ContourTone.G - g) * a; b += (ContourTone.B - b) * a;
@@ -1255,8 +1306,10 @@ namespace ClaudeCurtain
 
         public const double ReliefSunDegrees = 40;     // the light's height
         public const double ReliefExaggeration = 2.4;  // at this scale real hills look flat
-        public const float ContourMetres = 200f;
-        public const float ContourStrength = 0.45f;
+        public const float ContourMetres = 100f;        // 200 m until 2026-11-17
+        public const int ContourIndexEvery = 5;         // every 500 m, a little stronger
+        public const float ContourStrength = 0.32f;
+        public const float ContourIndexStrength = 0.5f;
         internal static readonly Color ReliefTone = Color.FromArgb(120, 114, 106);
         internal static readonly Color ContourTone = Color.FromArgb(82, 78, 72);
 

@@ -42,6 +42,8 @@ namespace ClaudeCurtain
         public const float ClockPerUnit = 2.15f;        // the clock's size in units; every other size is it over a power of φ
         public const double DriftPeriodSeconds = 300;   // one horizontal sweep; the vertical one is φ times longer
         public const double NightLevel = 0.70;          // the clock's brightness overnight
+        public const double ClockStep = 0.5;            // the clock sits half a step down the type scale (C / root φ), so the map gets the room
+        internal const string ClockLabel = "C / \u221A\u03C6";
         public const float MaxWidthShare = 0.90f;       // the block's largest share of the screen: the rest is the drift's room
         public const float MaxHeightShare = 0.94f;      // (its own margin, unit/4, still keeps ink off the edges at the drift's ends)
         public const int FadeInMs = 900;
@@ -453,8 +455,8 @@ namespace ClaudeCurtain
             Layout L = new Layout();
             L.Unit = unit;
             L.Landscape = landscape;
-            Face fClock = L.Own(MakeFace(famLight, c));
-            Face fSuffix = L.Own(MakeFace(famSemi, st(4)));
+            Face fClock = L.Own(MakeFace(famLight, st(ClockStep)));   // C / root φ since 2026-11-17 (C before): the map took the room
+            Face fSuffix = L.Own(MakeFace(famSemi, st(4 + ClockStep)));
             Face fTitle = L.Own(MakeFace(famSemi, st(5)));      // the message's title; its lines are set in fSmall
             Face fBody = L.Own(MakeFace(famSemi, st(5)));       // the PIN row's notes
             Face fData = L.Own(MakeFace(famRegular, st(5.5)));
@@ -478,8 +480,8 @@ namespace ClaudeCurtain
 
                     // ---------------- left column: x = 0 is its edge, y = 0 the top of the digits
                     float y = fClock.CapHeight;
-                    L.Baselines.Add(new KeyValuePair<string, float>("C", y));
-                    float leftW = AddClock(ops, m, s.Clock ?? "", fClock, fSuffix, time, track, y, st(6), L);
+                    L.Baselines.Add(new KeyValuePair<string, float>(ClockLabel, y));
+                    float leftW = AddClock(ops, m, s.Clock ?? "", fClock, fSuffix, time, track, y, st(6 + ClockStep), L);
                     // ...but sized for the widest time it can ever show, so the minute turning moves nothing.
                     string clockText = L.ClockText;
                     bool twelve = (s.Clock ?? "").Trim().IndexOf(' ') > 0;
@@ -488,12 +490,12 @@ namespace ClaudeCurtain
                     string any = WidestDigit(m, fClock.Font, "0123456789"), tens = WidestDigit(m, fClock.Font, "012345");
                     string widest = (twelve ? "1" + WidestDigit(m, fClock.Font, "012") : WidestDigit(m, fClock.Font, "012") + any) + ":" + tens + any;
                     foreach (string suffix in twelve ? new[] { " AM", " PM" } : new[] { "" })
-                        leftW = Math.Max(leftW, AddClock(new List<Op>(), m, widest + suffix, fClock, fSuffix, time, track, y, st(6), L));
+                        leftW = Math.Max(leftW, AddClock(new List<Op>(), m, widest + suffix, fClock, fSuffix, time, track, y, st(6 + ClockStep), L));
                     L.ClockText = clockText;
 
                     string date = (s.Date ?? "").ToUpperInvariant();
                     string zone = (s.Zone ?? "").Replace(",", "").ToUpperInvariant();
-                    y += st(4) + fLabel.CapHeight;
+                    y += st(4 + ClockStep) + fLabel.CapHeight;
                     L.Baselines.Add(new KeyValuePair<string, float>("C / φ⁶", y));
                     float x = AddText(ops, m, date, fLabel, Secondary, 0, y, track);
                     if (zone.Length > 0)
@@ -542,15 +544,42 @@ namespace ClaudeCurtain
                     // ---------------- right column: measured, then placed on the grid. Beside the map, the
                     // forecast's header shares a line with the map's, so the weather starts at one height
                     // across the page (and the map gets the room the forecast takes below it).
-                    float need = RightColumn(null, m, s, fData, fLabel, fSmall, track, unit, st, 0, 0, 0, 0);
+                    float head;
+                    float need = RightColumn(null, m, s, fData, fLabel, fSmall, track, unit, st, 0, 0, 0, 0, 0, out head);
                     L.HasRight = need > 0;
+                    if (hasMap && landscape && L.HasRight)
+                    {
+                        // If the clock leaves the map's header above where the forecast falls by itself (under the
+                        // system table), the map's header comes down to the forecast's line, so the two stay one.
+                        RightColumn(new List<Op>(), m, s, fData, fLabel, fSmall, track, unit, st, need, 0, 0, 0, 0, out head);
+                        if (head > mapHead)
+                        {
+                            mapHead = head;
+                            mapRule = (float)Math.Round(mapHead + st(6) * 0.8f);
+                            mapTop = (float)Math.Round(mapRule + st(5.5));
+                        }
+                    }
                     float forecastAt = hasMap && landscape ? mapHead : 0;
                     // the message's last baseline, laid out naturally
                     float lastLine = hasMap ? mapTop + mapMinH + st(3) + msgH : yDate + st(3) + pinH + st(3) + msgH;
+                    float stretch = 0;
                     if (L.HasRight && landscape)
                     {
-                        float rightH = RightColumn(new List<Op>(), m, s, fData, fLabel, fSmall, track, unit, st, need, 0, 0, forecastAt);
+                        float rightH = RightColumn(new List<Op>(), m, s, fData, fLabel, fSmall, track, unit, st, need, 0, 0, forecastAt, 0, out head);
                         lastLine = Math.Max(lastLine, rightH - fSmall.Font.Size * 0.35f);
+                        if (hasMap)
+                        {
+                            // Then the map takes the height the screen still allows (2026-11-17): the forecast's chart
+                            // and gaps stretch by as much, so both columns still end on one line.
+                            float margin = (float)Math.Ceiling(unit * 0.25f);
+                            float blockH = (float)Math.Ceiling(lastLine + fSmall.Font.Size * 0.3f) + 2 * margin;
+                            stretch = Math.Max(0f, (float)Math.Floor(maxH - blockH - 3));
+                            if (stretch > 0)
+                            {
+                                rightH = RightColumn(new List<Op>(), m, s, fData, fLabel, fSmall, track, unit, st, need, 0, 0, forecastAt, stretch, out head);
+                                lastLine = Math.Max(lastLine, rightH - fSmall.Font.Size * 0.35f);
+                            }
+                        }
                     }
                     float ruleTop = (float)Math.Round(lastLine - msgH);
                     L.Rule = new RectangleF(0, ruleTop, ruleW, ruleH);
@@ -601,7 +630,8 @@ namespace ClaudeCurtain
                         }
                     }
                     float rightBottom = L.HasRight
-                        ? RightColumn(ops, m, s, fData, fLabel, fSmall, track, unit, st, rightW, colX, colY, landscape ? forecastAt : 0)
+                        ? RightColumn(ops, m, s, fData, fLabel, fSmall, track, unit, st, rightW, colX, colY, landscape ? forecastAt : 0,
+                                      landscape ? stretch : 0, out head)
                         : 0;
                     if (L.HasRight && landscape)
                     {
@@ -1103,8 +1133,9 @@ namespace ClaudeCurtain
         /// </summary>
         private static float RightColumn(List<Op> ops, Graphics m, DisplayState s, Face fData, Face fLabel, Face fSmall,
                                          float track, float unit, Func<double, float> st, float width, float ox, float oy,
-                                         float forecastAt)
+                                         float forecastAt, float stretch, out float headAt)
         {
+            headAt = 0;   // the forecast's header baseline, as placed
             bool measure = ops == null;
             if (measure) ops = new List<Op>();
             float gx = st(5);
@@ -1138,7 +1169,7 @@ namespace ClaudeCurtain
                 y += st(6) * 0.8f;
                 ops.Add(new Op { Kind = 1, X = ox, Y = (float)Math.Round(y), W = w, H = 1, Color = RuleColor });
                 y += st(5) + fData.CapHeight;
-                float pitch = fData.Font.Size * 1.8f;
+                float pitch = fData.Font.Size * 1.6f;   // 1.8 until 2026-11-17: a tighter table lets the map's header rise
                 float vx = ox + labelW + gx, gx0 = vx + valueW + gx, nx = gx0 + graphW + gx;
                 foreach (object[] r in rows)
                 {
@@ -1189,7 +1220,7 @@ namespace ClaudeCurtain
             bool haveDays = raw.Count > 0, haveHours = s.Hourly != null && s.Hourly.Length > 0;
             if (haveDays || haveHours)
             {
-                if (rows.Count > 0) y += st(3);
+                if (rows.Count > 0) y += st(3.5);   // st(3) until 2026-11-17
                 string head = "FORECAST" + (place != null ? "   ·   " + place.ToUpperInvariant() : "");
                 string side = asOf != null ? "AS OF " + asOf.ToUpperInvariant() : "";
                 float headW = Measure(m, head, fLabel.Font, track) + gx + Measure(m, "AS OF 12:59 PM", fLabel.Font, track);
@@ -1210,6 +1241,12 @@ namespace ClaudeCurtain
 
                 y += fLabel.CapHeight;
                 if (forecastAt > y) y = forecastAt;
+                headAt = y;
+                // Height the map asks for, in whole pixels: most to the temperature curve, the rest to the rain
+                // bars and the gaps between the sections and the days, so the column ends where the message does.
+                int give = Math.Max(0, (int)Math.Floor(stretch));
+                int gHours = (int)(give * 0.15f), gCurve = (int)(give * 0.4f), gBars = (int)(give * 0.15f), gDays = (int)(give * 0.15f);
+                int gRow1 = (give - gHours - gCurve - gBars - gDays) / 2, gRow2 = give - gHours - gCurve - gBars - gDays - gRow1;
                 AddText(ops, m, head, fLabel, Tertiary, ox, y, track);
                 if (side.Length > 0) AddText(ops, m, side, fLabel, Tertiary, ox + w - Measure(m, side, fLabel.Font, track), y, track);
                 y += st(6) * 0.8f;
@@ -1244,16 +1281,16 @@ namespace ClaudeCurtain
                 // ---- the next six hours: hour, symbol, temperature on a curve, chance of rain. Its sections sit
                 // a step apart (C/φ^3.5) and its curve and bars are generous: beside the map, this column's
                 // height is what gives the map its height.
-                y += st(3.5) + fLabel.CapHeight;
+                y += st(3.5) + gHours + fLabel.CapHeight;
                 AddText(ops, m, "NEXT 6 HOURS", fLabel, Tertiary, ox, y, track);
                 float slot = w / 6f;
                 float hourBase = y + st(5) + fLabel.CapHeight;
                 float iconSz = (float)Math.Round(fData.CapHeight * 2.0f);
                 float iconTop = hourBase + st(6);
                 float curveTop = iconTop + iconSz + st(6) + fData.CapHeight + st(6.5);
-                float curveH = (float)Math.Round(st(3) * 0.85f);
+                float curveH = (float)Math.Round(st(3) * 0.85f) + gCurve;
                 float curveBottom = curveTop + curveH;
-                float barMax = (float)Math.Round(st(4));
+                float barMax = (float)Math.Round(st(4)) + gBars;
                 float barBase = curveBottom + st(5.5) + barMax;
                 float popBase = barBase + st(6.5) + fLabel.CapHeight;
                 if (hours.Length > 0)
@@ -1292,7 +1329,7 @@ namespace ClaudeCurtain
                 y = popBase + fLabel.Font.Size * 0.35f;
 
                 // ---- the next three days (three rows are always reserved)
-                y += st(3.5) + fLabel.CapHeight;
+                y += st(3.5) + gDays + fLabel.CapHeight;
                 AddText(ops, m, "NEXT 3 DAYS", fLabel, Tertiary, ox, y, track);
                 y += st(5) + fData.CapHeight;
                 float rowPitch = line2 + st(4) * 0.95f + fData.CapHeight;
@@ -1326,7 +1363,7 @@ namespace ClaudeCurtain
                         Op d = AddTextOp(ops, raw[i], fSmall, Secondary, ox, y, 0);
                         d.W = w;
                     }
-                    y += rowPitch;
+                    y += rowPitch + (i == 0 ? gRow1 : i == 1 ? gRow2 : 0);
                 }
                 y -= st(4) * 0.95f + fData.CapHeight;
                 y += fSmall.Font.Size * 0.35f;

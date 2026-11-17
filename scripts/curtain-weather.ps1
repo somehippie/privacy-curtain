@@ -194,8 +194,9 @@ function Update-Forecast {
 # ------------------------------------------------------------------ the weather map
 # Radar: NOAA's MRMS mosaic (every radar that covers the area, blended and cleaned of ground clutter), about
 # every 4 minutes. Clouds: NOAA's GOES satellite pictures, every 5 minutes, visible by day and infrared at
-# night. Both through NOAA nowCOAST. Land and water: NASA GIBS's map made from OpenStreetMap, fetched once.
-# All keyless. The requests carry a box rounded to a tenth of a degree around the forecast grid, so the
+# night. Both through NOAA nowCOAST. Land and water: NASA GIBS's map made from OpenStreetMap, fetched once,
+# with the rivers, canals and lakes of the USGS National Hydrography Dataset added (a river delta's channels, the
+# reservoirs in the hills), also fetched once. All keyless. The requests carry a box rounded to a tenth of a degree around the forecast grid, so the
 # servers learn the area, never the address. The curtain reads the pictures from local\ (map.txt lists them).
 $nowcoast = 'https://nowcoast.noaa.gov/geoserver'
 $mapNorth = 1.0       # the box: from 0.6 degrees south of the grid to 1.0 north (the curtain shows more of the north)
@@ -269,11 +270,26 @@ function Get-MapUrl([string]$Service, [string]$Layer, [double[]]$Box, [int]$Widt
     return $url
 }
 
+# The USGS hydrography service's export as a water mask: rivers, bays, canals, lakes, reservoirs and estuaries
+# in plain blue, without the outlines and names of its own style and without marsh, at any scale (its small-
+# scale layers would otherwise switch off at this size). Same grid as the land and water map.
+function Get-WaterUrl([double[]]$Box, [int]$Width, [int]$Height) {
+    $fill = '{"type":"simple","symbol":{"type":"esriSFS","style":"esriSFSSolid","color":[0,0,255,255],"outline":{"type":"esriSLS","style":"esriSLSNull","color":[0,0,0,0],"width":0}}}'
+    $area = "FTYPE IN ('StreamRiver','BayInlet','SeaOcean','CanalDitch','Lock Chamber','Submerged Stream')"
+    $body = "FTYPE IN ('LakePond','Reservoir','Estuary') AND AREASQKM >= 0.2"   # not the specks of small ponds
+    $layers = '[{"id":7,"source":{"type":"mapLayer","mapLayerId":7},"definitionExpression":"' + $area + '","drawingInfo":{"renderer":' + $fill +
+              ',"showLabels":false},"minScale":0,"maxScale":0},{"id":10,"source":{"type":"mapLayer","mapLayerId":10},"definitionExpression":"' + $body +
+              '","drawingInfo":{"renderer":' + $fill + ',"showLabels":false},"minScale":0,"maxScale":0}]'
+    $bbox = (@($Box[1], $Box[0], $Box[3], $Box[2]) | ForEach-Object { $_.ToString('0.###', $inv) }) -join ','   # west,south,east,north
+    return 'https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/export?bbox=' + $bbox + '&bboxSR=4326&imageSR=4326' +
+           "&size=$Width,$Height&dpi=48&format=png32&transparent=true&dynamicLayers=" + [uri]::EscapeDataString($layers) + '&f=image'
+}
+
 # Downloads a picture to a temporary name, checks it is one, then moves it into place.
-function Save-MapImage([string]$Url, [string]$Path) {
+function Save-MapImage([string]$Url, [string]$Path, [int]$WaitSec = 30) {
     $tmp = "$Path.part"
     try {
-        $r = Invoke-WebRequest -UseBasicParsing -Uri $Url -Headers @{ 'User-Agent' = $ua } -TimeoutSec 30 -OutFile $tmp -PassThru
+        $r = Invoke-WebRequest -UseBasicParsing -Uri $Url -Headers @{ 'User-Agent' = $ua } -TimeoutSec $WaitSec -OutFile $tmp -PassThru
         $type = [string]$r.Headers['Content-Type']
         if ($type -notlike 'image/*') { throw "the server sent $type, not a picture" }
         Move-Item -Path $tmp -Destination $Path -Force
@@ -324,8 +340,9 @@ function Get-StationLines([double[]]$Box) {
     return $script:stationLines
 }
 
-# Elevation, once per place: AWS Terrain Tiles ("terrarium" PNGs; USGS 3DEP elevation in the US), zoom 9,
-# the 15 or so tiles that cover the box, about 1.6 MB. Returns the map.txt line that lists them.
+# Elevation, once per place: AWS Terrain Tiles ("terrarium" PNGs; USGS 3DEP elevation in the US), zoom 10
+# (about 120 m a pixel; zoom 9 until 2026-11-17), the 70 or so tiles that cover the box, about 7 MB.
+# Returns the map.txt line that lists them.
 function Get-TileX([double]$Lon, [int]$Z) { return [int][Math]::Floor(($Lon + 180) / 360 * [Math]::Pow(2, $Z)) }
 function Get-TileY([double]$Lat, [int]$Z) {
     $r = $Lat * [Math]::PI / 180
@@ -333,7 +350,7 @@ function Get-TileY([double]$Lat, [int]$Z) {
 }
 
 function Update-Dem([double[]]$Box) {
-    $z = 9
+    $z = 10
     $x0 = Get-TileX $Box[1] $z; $x1 = Get-TileX $Box[3] $z
     $y0 = Get-TileY $Box[2] $z; $y1 = Get-TileY $Box[0] $z
     $names = @{}
@@ -435,9 +452,11 @@ function Update-Map {
     # Land and water, once per place.
     $baseName = 'map-base-{0}.png' -f (($box | ForEach-Object { $_.ToString('0.0', $inv) }) -join '_')
     $basePath = Join-Path $LocalDir $baseName
+    $baseW = [int][Math]::Round($lonSpan / 0.0015)
+    $baseH = [int][Math]::Round($latSpan / 0.0015)
     if (-not (Test-Path $basePath)) {
         try {
-            Save-MapImage (Get-MapUrl 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi' 'OSM_Land_Water_Map' $box ([int][Math]::Round($lonSpan / 0.0015)) ([int][Math]::Round($latSpan / 0.0015)) 'image/png' '') $basePath
+            Save-MapImage (Get-MapUrl 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi' 'OSM_Land_Water_Map' $box $baseW $baseH 'image/png' '') $basePath
         } catch {
             Write-Host "Map skipped: the land and water map did not download ($($_.Exception.Message))."
             return
@@ -446,6 +465,16 @@ function Update-Map {
         # A new box (a new place, or a new shape): radar and cloud pictures cut for the old one would sit in the
         # wrong place, and they are kept by time alone, so they all go and are fetched again for this box.
         Get-ChildItem -Path $LocalDir -File | Where-Object { $_.Name -match $mapNamePattern } | Remove-Item -Force -ErrorAction SilentlyContinue
+    }
+
+    # Rivers, canals and lakes, once per place, on the same grid; best-effort (without them the map is as before).
+    $waterName = 'map-water-{0}.png' -f (($box | ForEach-Object { $_.ToString('0.0', $inv) }) -join '_')
+    $waterPath = Join-Path $LocalDir $waterName
+    if (-not (Test-Path $waterPath)) {
+        try {
+            Save-MapImage (Get-WaterUrl $box $baseW $baseH) $waterPath 90   # drawn on request, so it can take a while
+            Get-ChildItem -Path $LocalDir -Filter 'map-water-*.png' | Where-Object { $_.Name -ne $waterName } | Remove-Item -Force -ErrorAction SilentlyContinue
+        } catch { Write-Host "Rivers and lakes skipped: $($_.Exception.Message)" }
     }
 
     # Elevation for the relief, once per place.
@@ -472,6 +501,7 @@ function Update-Map {
     $lines.Add(('# weather map for the curtain, as of {0}' -f (Get-Date -Format 't')))
     $lines.Add("box $boxText")
     $lines.Add("base $baseName")
+    if (Test-Path $waterPath) { $lines.Add("water $waterName") }
     foreach ($l in @($dem) + @($radar) + @($sat) + @($stations) + @($tides)) { if ($l) { $lines.Add($l) } }
     $lines.Add(('credit NOAA  {0}  USGS  {0}  {1} OpenStreetMap' -f [char]0x00B7, [char]0x00A9))
     Write-Atomic $mapFile $lines
