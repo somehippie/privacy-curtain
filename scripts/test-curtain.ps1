@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Lifecycle stages work even while the PC is locked:
-    selftest smoke off kill watchdog-lost session-end close pin summary-layout second-instance no-pin freeze two-minute
+    selftest smoke off kill watchdog-lost session-end close pin summary-layout second-instance no-pin launcher freeze two-minute
 
   Desktop stages need the PC unlocked, because they take screenshots and send clicks and keys:
     capture inject pin-injected setpin
@@ -35,7 +35,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'curtain-common.ps1')
 
 $lifecycle = @('selftest', 'smoke', 'off', 'kill', 'watchdog-lost', 'session-end', 'close', 'pin', 'summary-layout',
-               'second-instance', 'no-pin', 'freeze', 'keep-awake', 'events', 'alerts', 'two-minute')
+               'second-instance', 'no-pin', 'launcher', 'freeze', 'keep-awake', 'events', 'alerts', 'two-minute')
 $desktopStages = @('capture', 'inject', 'pin-injected', 'setpin')
 if (-not $Stage) { if ($Desktop) { $Stage = $desktopStages } else { $Stage = $lifecycle } }
 
@@ -364,6 +364,57 @@ function Invoke-NoPin {
 
     $p = Start-Process -FilePath $script:CurtainExe -ArgumentList @('--seconds', '999999', '--local-dir', "`"$testLocal`"") -PassThru -Wait
     Add-Result $s 'a timer longer than 24 hours is refused' ($p.ExitCode -eq 2 -and (Get-CurtainProcess).Count -eq 0) "exit code $($p.ExitCode)"
+}
+
+function Invoke-Launcher {
+    # The desktop launcher's Remote Control box: which Claude Code sessions count, and how the box starts.
+    # Fake session files in a throwaway folder; this PowerShell stands in for a running session.
+    $s = 'launcher'
+    $dir = Join-Path $testLocal 'sessions'
+    Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    $started = (Get-Process -Id $PID).StartTime.ToFileTimeUtc()
+    $gone = 99999996
+    $write = { param($Name, $Data) [System.IO.File]::WriteAllText((Join-Path $dir $Name), ($Data | ConvertTo-Json)) }
+    $ours = { @(Get-ClaudeSession $dir | Where-Object { $_.Pid -eq $PID -or $_.Pid -eq $gone }) }
+    try {
+        & $write "$PID.json" @{ pid = $PID; procStart = "$started"; cwd = 'C:\work\demo'; bridgeSessionId = 'session_test' }
+        & $write "$gone.json" @{ pid = $gone; procStart = '1'; cwd = 'C:\gone'; bridgeSessionId = 'session_gone' }
+        $found = @(& $ours)
+        Add-Result $s 'a running session with Remote Control on counts; one that has ended does not' `
+            ($found.Count -eq 1 -and $found[0].Pid -eq $PID -and $found[0].RemoteControl -and $found[0].Folder -eq 'C:\work\demo')
+        $on = Get-RemoteControlAdvice $found $true
+        Add-Result $s 'with Remote Control already on, the box starts cleared and says where' (-not $on.Check -and $on.Enabled -and $on.Note -like '*demo (since *')
+
+        & $write "$PID.json" @{ pid = $PID; procStart = "$($started - 600000000)"; cwd = 'C:\work\demo'; bridgeSessionId = 'session_test' }
+        Add-Result $s 'a file whose process id now belongs to another process does not count' (@(& $ours).Count -eq 0)
+
+        & $write "$PID.json" @{ pid = $PID; procStart = "$started"; cwd = 'C:\work\demo' }
+        $found = @(& $ours)
+        $off = Get-RemoteControlAdvice $found $true
+        Add-Result $s 'a session without Remote Control: the box starts ticked and suggests /remote-control' `
+            ($found.Count -eq 1 -and -not $found[0].RemoteControl -and $off.Check -and $off.Note -like '*/remote-control*')
+        $none = Get-RemoteControlAdvice @() $true
+        $missing = Get-RemoteControlAdvice @() $false
+        Add-Result $s 'no session: the box starts ticked; no Claude Code: it is cleared and disabled' `
+            ($none.Check -and $none.Enabled -and -not $missing.Check -and -not $missing.Enabled)
+    } finally {
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    # -Preview draws the dialog and starts nothing: no curtain, no new Claude Code.
+    Stop-AnyCurtain
+    $png = Join-Path $testLocal 'launch-dialog.png'
+    Remove-Item $png -Force -ErrorAction SilentlyContinue
+    $before = @(Get-Process -Name 'claude' -ErrorAction SilentlyContinue).Count
+    $text = (& powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'curtain-launch.ps1') -Preview $png | Out-String)
+    $size = $null
+    Add-Type -AssemblyName System.Drawing
+    if (Test-Path $png) { $img = [System.Drawing.Image]::FromFile($png); $size = $img.Size; $img.Dispose() }
+    Add-Result $s 'curtain-launch.ps1 -Preview draws the dialog and starts nothing' `
+        ($size -and $size.Width -gt 200 -and $size.Height -gt 100 -and $text -like '*Remote Control box starts*' -and
+         (Get-CurtainProcess).Count -eq 0 -and @(Get-Process -Name 'claude' -ErrorAction SilentlyContinue).Count -le $before) "$($size.Width) x $($size.Height)"
+    Remove-Item $png -Force -ErrorAction SilentlyContinue
 }
 
 function Invoke-Freeze {
@@ -858,6 +909,7 @@ try {
                 'summary-layout'  { Invoke-SummaryLayout }
                 'second-instance' { Invoke-SecondInstance }
                 'no-pin'          { Invoke-NoPin }
+                'launcher'        { Invoke-Launcher }
                 'freeze'          { Invoke-Freeze }
                 'two-minute'      { Invoke-TwoMinute }
                 'keep-awake'      { Invoke-KeepAwake }

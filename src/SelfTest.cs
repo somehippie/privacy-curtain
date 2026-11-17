@@ -317,8 +317,8 @@ namespace ClaudeCurtain
         {
             Size[] screens = { new Size(1280, 720), new Size(1920, 1080), new Size(1920, 1200), new Size(2560, 1440), new Size(3440, 1440), new Size(1080, 1920) };
             string[] states = { "idle", "typing", "wrong", "cooldown", "admin", "bright", "night", "clouds" };
-            bool allFit = true, allOnScreen = true, columnsGolden = true, mapPlaced = true;
-            string worst = "", mapWorst = "";
+            bool allFit = true, allOnScreen = true, columnsGolden = true, mapPlaced = true, headsShared = true;
+            string worst = "", mapWorst = "", headsWorst = "";
             long slowestMs = 0;
             foreach (Size scr in screens)
             {
@@ -354,6 +354,20 @@ namespace ClaudeCurtain
                             mapPlaced = false;
                             mapWorst = state + " at " + scr.Width + "x" + scr.Height + ": map " + mp + ", rule at " + l.Rule.Top;
                         }
+                        // Beside the map, the forecast's header shares its line: one hairline row runs under both.
+                        if (l.Landscape && l.HasRight && !mp.IsEmpty)
+                        {
+                            int ry = (int)Math.Round(l.OriginY + l.MapRuleY);
+                            Color under = b.GetPixel((int)Math.Round(l.OriginX + mp.Width / 2f), ry);
+                            Color beside = b.GetPixel((int)Math.Round(l.OriginX + l.RightCol.X + l.RightCol.Width / 2f), ry);
+                            Func<Color, bool> hairline = c => Math.Abs(c.R - CurtainPainter.RuleColor.R) <= 2 &&
+                                                              Math.Abs(c.G - CurtainPainter.RuleColor.G) <= 2 && Math.Abs(c.B - CurtainPainter.RuleColor.B) <= 2;
+                            if (!hairline(under) || !hairline(beside))
+                            {
+                                headsShared = false;
+                                headsWorst = state + " at " + scr.Width + "x" + scr.Height + ": " + under + " / " + beside;
+                            }
+                        }
                         // Eight hours of drift, one sample every 7 s: the composition never leaves the screen.
                         for (double t = 0; t < 8 * 3600; t += 7)
                         {
@@ -379,6 +393,8 @@ namespace ClaudeCurtain
             Check("painter: a re-render takes under 150 ms", slowestMs < 150);
             Check("map: sits in the left column under its header, clear of the message, with the PIN row in its lowest band" +
                   (mapPlaced ? "" : " (" + mapWorst + ")"), mapPlaced);
+            Check("painter: beside the map, the forecast's header and rule share the map's line" +
+                  (headsShared ? "" : " (" + headsWorst + ")"), headsShared);
 
             // Stable geometry: wildly different readings, times and forecasts must give the very same frame.
             {
@@ -616,12 +632,12 @@ namespace ClaudeCurtain
 
             // Which part of the area shows.
             {
-                GeoBox box = new GeoBox(44.4, -123.5, 45.6, -120.5);
-                GeoBox c = WeatherMap.Crop(box, 45.0, -122.0, 873, 390);
-                double homeX = (-122.0 - c.West) / (c.East - c.West) * 873;
-                Check("map: it shows 80 km top to bottom, keeps the map's shape, and puts home on the golden section, west of it the larger part",
-                      Math.Abs(c.KmTall - WeatherMap.ViewKm) < 0.5 && Math.Abs(c.KmWide / c.KmTall - 873 / 390.0) < 0.02 &&
-                      Math.Abs(homeX - 873 / CurtainPainter.Phi) < 1.5 && Math.Abs((c.North + c.South) / 2 - 45.0) < 1e-6);
+                GeoBox box = new GeoBox(44.4, -123.5, 45.6, -120.5), roomy = new GeoBox(44.2, -124.2, 45.8, -119.8);
+                GeoBox c = WeatherMap.Crop(roomy, 45.0, -122.0, 873, 454);
+                double homeX = (-122.0 - c.West) / (c.East - c.West) * 873, homeY = (c.North - 45.0) / (c.North - c.South) * 454;
+                Check("map: it shows 100 km top to bottom, keeps the map's shape, and puts home on the golden section both ways, the larger parts west and north of it",
+                      WeatherMap.ViewKm == 100 && Math.Abs(c.KmTall - WeatherMap.ViewKm) < 0.5 && Math.Abs(c.KmWide / c.KmTall - 873 / 454.0) < 0.02 &&
+                      Math.Abs(homeX - 873 / CurtainPainter.Phi) < 1.5 && Math.Abs(homeY - 454 / CurtainPainter.Phi) < 1.5);
                 GeoBox wide = WeatherMap.Crop(box, 45.0, -122.0, 3000, 100);
                 GeoBox edge = WeatherMap.Crop(box, 44.5, -123.45, 873, 390);
                 Check("map: it never reaches outside the pictures, even for a very wide map or a home near their edge",
@@ -774,18 +790,22 @@ namespace ClaudeCurtain
                 {
                     // The sample's tide: a low of 0.6 ft 4.2 hours ago, a high of 6.3 ft in 2.1 hours, a low of 2.1 ft after it.
                     float nowX = tc.Spark.Left + tc.Spark.Width * CurtainPainter.TidePastHours / CurtainPainter.TideHours;
-                    bool corner = tc.Panel.Top > 0 && tc.Panel.Right < l.Map.Width && tc.Panel.Left > l.Map.Width / 2f && tc.Panel.Bottom < l.Map.Height / 2f;
+                    // Neither top corner hides a temperature, so it takes the one over more water: the sea, to the west.
+                    int smw = (int)Math.Round(l.Map.Width), smh = (int)Math.Round(l.Map.Height);
+                    RectangleF other = new RectangleF(l.Map.Width - tc.Panel.Right, tc.Panel.Top, tc.Panel.Width, tc.Panel.Height);
+                    bool corner = tc.Panel.Top > 0 && tc.Panel.Left > 0 && tc.Panel.Right < l.Map.Width / 2f && tc.Panel.Bottom < l.Map.Height / 2f &&
+                                  WeatherMap.WaterShare(s.Map, l.MapCrop, smw, smh, tc.Panel) > WeatherMap.WaterShare(s.Map, l.MapCrop, smw, smh, other) + 0.5;
                     bool rows = tc.Rows.Count == 3 &&
                                 tc.Rows[0].Label == "TIDE" && tc.Rows[0].Height == "4.9 ft" && tc.Rows[0].Change == "\u2191" && tc.Rows[0].Time == "" &&
                                 tc.Rows[1].Label == "HIGH" && tc.Rows[1].Height == "6.3 ft" && tc.Rows[1].Change == "+5.7" && tc.Rows[1].Time.Length > 0 &&
                                 tc.Rows[2].Label == "LOW" && tc.Rows[2].Height == "2.1 ft" && tc.Rows[2].Change == "\u22124.2";
                     bool inside = tc.LabelX > tc.Panel.Left && tc.ChangeRight < tc.Panel.Right && tc.Spark.Top > tc.Panel.Top &&
                                   tc.Rows[2].Baseline < tc.Panel.Bottom && tc.Spark.Right <= tc.HeightRight - 10;
-                    Check("tide: the sample's table sits in the top right corner: now (4.9 ft, rising, the day's curve), then the next high and low with times, heights and changes (+5.7, \u22124.2)",
+                    Check("tide: the sample's table sits in the top left corner, over the sea: now (4.9 ft, rising, the day's curve), then the next high and low with times, heights and changes (+5.7, \u22124.2)",
                           corner && rows && inside && Math.Abs(tc.Curve[tc.Now].X - nowX) < 0.5f &&
                           CurtainPainter.Feet(-0.04, false) == "0.0" && CurtainPainter.Feet(-0.2, false) == "\u22120.2");
 
-                    // Two more temperatures under that corner: now the west one hides fewer, so the inset moves there.
+                    // Two more temperatures under that corner: now the east one hides fewer, so the inset moves there.
                     DisplayState busy = CurtainPreview.Sample(po, "idle");
                     GeoBox bc = l.MapCrop;
                     List<MapStation> more = new List<MapStation>(busy.Map.Stations);
@@ -797,8 +817,8 @@ namespace ClaudeCurtain
                     }
                     busy.Map.Stations = more.ToArray();
                     CurtainPainter.Layout bl = CurtainPainter.Compose(busy, 2560, 1440);
-                    Check("tide: with more temperatures under the east corner, the inset takes the west one, clear of every label",
-                          bl.MapTide != null && bl.MapTide.Panel.Right < bl.Map.Width / 2f && !bl.MapStations.Exists(p => p.Box.IntersectsWith(bl.MapTide.Panel)));
+                    Check("tide: with more temperatures under the west corner, the inset takes the east one, clear of every label",
+                          bl.MapTide != null && bl.MapTide.Panel.Left > bl.Map.Width / 2f && !bl.MapStations.Exists(p => p.Box.IntersectsWith(bl.MapTide.Panel)));
                     bl.Dispose();
                 }
                 l.Dispose();

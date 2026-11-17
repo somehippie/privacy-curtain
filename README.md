@@ -65,11 +65,15 @@ hours, at most 24 (`-Hours 24` for a full day).
 > Or by hand: right-click the desktop > New > Shortcut, and paste
 > `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<repo>\scripts\curtain-launch.ps1"`.
 >
-> The shortcut asks how many hours (prefilled 12, any value 1–24) and raises the curtain with no console
-> window. If [Claude Code](https://claude.com/claude-code) is installed, it first starts a Remote Control
-> session named `privacy-curtain` in Windows Terminal, so the PC stays reachable from your phone or another
-> computer while the screen is dark (for example to run `curtain-off.ps1`). That part is best-effort: if it
-> cannot start, the curtain still goes up.
+> The shortcut opens a small dialog: how many hours (prefilled 12, any value 1–24), and a box, *Open Claude
+> Code with Remote Control*. Ticked, and with [Claude Code](https://claude.com/claude-code) installed, it
+> first starts a Remote Control session named `privacy-curtain` in Windows Terminal, so the PC stays
+> reachable from your phone or another computer while the screen is dark (for example to run
+> `curtain-off.ps1`). The box starts cleared when a Claude Code session on this PC already has Remote Control
+> on, however it was turned on (`claude --remote-control`, or `/remote-control` typed in a session), and the
+> line under it says which, so launching the curtain again does not pile up windows. (It reads the small
+> file Claude Code keeps for each running session in `~\.claude\sessions`.) Then it raises the curtain with
+> no console window. Remote Control is best-effort: if it cannot start, the curtain still goes up.
 
 ## Ways back in
 
@@ -188,8 +192,9 @@ about what it is doing. Everything on it comes from one proportional system buil
   weather map and the message on the left, live data on the right, a hairline between them. Both columns share a top edge
   (the data column's first label sits level with the top of the digits) and a bottom edge (the message's
   last line sits level with the forecast's last line), so the clock heads the page, the message anchors
-  it, and typed PIN dots appear in the open space between. On a portrait screen the data moves under the
-  message. The composition rests on the golden section of the screen: the space above it and below it
+  it, and typed PIN dots appear in the open space between. Beside the map, the forecast's header shares the
+  map's header line, so the weather starts at one height across the page. On a portrait screen the data
+  moves under the message. The composition rests on the golden section of the screen: the space above it and below it
   are 1 : φ.
 - **A fixed frame.** Every slot is sized for the widest value it can ever hold (CPU "100%", a network
   rate of "999.9 KB/s", the widest time the clock's digits can make, "WEDNESDAY", "−99°"), and the image
@@ -211,9 +216,10 @@ about what it is doing. Everything on it comes from one proportional system buil
   moon, cloud, partly cloudy, rain, storm, snow, fog, wind).
 - **The weather map.** Under the date, as wide as the clock, with a header ruled like the data column's
   sections ("RADAR · PAST HOUR", the picture's time at the right). On a landscape screen the data column
-  decides where the message sits, so the map fills space that was empty and moves nothing else. It shows
-  80 km top to bottom, with home as a small accent-coloured dot halfway down and on the golden section
-  across, so the larger part of the map lies to the west, where weather usually comes from. It is drawn
+  decides where the message sits, so the map fills space that was empty and moves nothing else; its header
+  shares a line with the forecast's, which gives it the room the forecast takes below that line. It shows
+  100 km top to bottom, with home as a small accent-coloured dot on the golden section both ways, so the
+  larger parts of the map lie to the west, where weather usually comes from, and to the north. It is drawn
   in the curtain's own palette rather than the services' colours: water a shade lighter than the black
   land, the shoreline a fine line drawn over the weather so the coast stays readable under fog, rain in
   the data hue from quiet to bright as it gets heavier (amber when heavy, coral when severe, with a
@@ -224,8 +230,9 @@ about what it is doing. Everything on it comes from one proportional system buil
   it is notable. The tide has a small table in one of the top corners, with what a fisherman or a surfer
   looks for: "TIDE" with the day's curve (now a bright dot on it), the height now and an arrow for rising
   or falling; then the next low and high with their times, heights and the change from the high or low
-  before ("−6.1": the water drops 6.1 ft). It takes the top corner that hides fewer temperatures, on a tie
-  the east one, where the weather has already gone by. The PIN row shares the map's lowest band: while a PIN is typed the map fades to black, and it
+  before ("−6.1": the water drops 6.1 ft). It takes the top corner that hides fewer temperatures; on a tie
+  the one over more water (the tide's own element, with no towns or hills to hide), then the east one, where
+  the weather has already gone by. The PIN row shares the map's lowest band: while a PIN is typed the map fades to black, and it
   comes back when the row clears.
 - **Colour.** Warm neutrals in four text tones and one accent, the short terracotta rule. The self-tests
   compute each tone's contrast on black: every text tone meets WCAG AA (the faintest labels are 4.9 : 1)
@@ -374,22 +381,24 @@ Please read these before relying on the curtain.
 ```
 
 They use a throwaway PIN in `local\test` and never touch the real one, and they never call your notify
-hook. The self-tests (~122 checks, including PIN hashing/entry rules, which key presses belong to your own
+hook. The self-tests (~123 checks, including PIN hashing/entry rules, which key presses belong to your own
 unlock, the time-zone label, the stats sampler, weather-file reading, and the design: every state rendered
-at 720p, 1080p, 16:10, 1440p, ultrawide and portrait, fitting the screen, the columns exactly φ : 1,
+at 720p, 1080p, 16:10, 1440p, ultrawide and portrait, fitting the screen, the columns exactly φ : 1, the
+forecast's header on the map's line,
 staying on screen through 8 hours of drift, a fixed frame whatever the readings, the hourly forecast file,
 sunrise and sunset against published times, every text tone's WCAG contrast, and the animations starting
 and settling; and the weather map: its place in the layout, every radar colour read back as its dBZ, the
 map file and its pictures, stale and missing pictures, radar or clouds, which part of the area shows, the
 replay's timing, the sun's height, the replay and the PIN veil letting the screen rest, station reports,
 elevation tiles decoded and stitched in the right places, the tide curve through each high and low, which
-stations get a label, labels never overlapping, the relief being drawn, the tide table's corner and its
-rows, and `--hide-home` leaving home off the map) and the full
+stations get a label, labels never overlapping, the relief being drawn, the tide table's corner (over the
+water on a tie) and its rows, and `--hide-home` leaving home off the map) and the full
 lifecycle suite (100+ checks: a screenshot seeing the
 desktop through the curtain, injected clicks and typing passing through, simulated shutdown, every hang
 being recovered, the keep-awake request appearing with the curtain and vanishing with it, the alerts, the
-re-assert, the event log/summary, and the summary window laid out at 720p, 1080p and 1440p with nothing
-clipped) both pass. The on-screen info
+re-assert, the event log/summary, the summary window laid out at 720p, 1080p and 1440p with nothing
+clipped, and the launcher's Remote Control box: which Claude Code sessions count, a session that has ended
+or whose process id was reused not counting, and how the box starts) both pass. The on-screen info
 panel and real physical key presses are not script-testable (the curtain is excluded from screen capture by
 design); a person-at-the-PC checklist is in the lifecycle test's output.
 

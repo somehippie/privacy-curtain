@@ -108,7 +108,7 @@ namespace ClaudeCurtain
     {
         public const string IndexName = "map.txt";
         public const double KmPerDegree = 111.2;
-        public const double ViewKm = 80;          // how much of the area the map shows, top to bottom
+        public const double ViewKm = 100;         // how much of the area the map shows, top to bottom
         public const double StaleHours = 3;       // older pictures are never shown
         public const int RainDbz = 20;            // light rain on the radar
         public const int RainChance = 30;         // % chance in the next three hours that makes the map show radar
@@ -707,10 +707,28 @@ namespace ClaudeCurtain
             return false;
         }
 
+        /// <summary>How much of a part of a w x h map (r, in map pixels, showing crop) is water: 0 (all land) to 1.</summary>
+        internal static double WaterShare(WeatherMap m, GeoBox crop, int w, int h, RectangleF r)
+        {
+            if (m == null || m.Water.Length == 0 || m.BaseW <= 0 || m.BaseH <= 0 || w <= 0 || h <= 0) return 0;
+            const int nx = 16, ny = 8;
+            double sum = 0;
+            for (int j = 0; j < ny; j++)
+                for (int i = 0; i < nx; i++)
+                {
+                    double lon = crop.West + (r.Left + (i + 0.5) * r.Width / nx) / w * (crop.East - crop.West);
+                    double lat = crop.North - (r.Top + (j + 0.5) * r.Height / ny) / h * (crop.North - crop.South);
+                    int bx = (int)((lon - m.Box.West) / (m.Box.East - m.Box.West) * m.BaseW);
+                    int by = (int)((m.Box.North - lat) / (m.Box.North - m.Box.South) * m.BaseH);
+                    if (bx >= 0 && by >= 0 && bx < m.BaseW && by < m.BaseH) sum += m.Water[by * m.BaseW + bx] / 255.0;
+                }
+            return sum / (nx * ny);
+        }
+
         /// <summary>
         /// The part of the box a w x h map shows: ViewKm tall (less if the box is too small for the shape),
-        /// home halfway down and on the golden section across, so φ of the width lies to the west, where
-        /// the weather mostly comes from. Slid inward where home is too near the box's edge.
+        /// home on the golden section both ways, so the larger parts lie to the west, where the weather mostly
+        /// comes from, and to the north. Slid inward where home is too near the box's edge.
         /// </summary>
         internal static GeoBox Crop(GeoBox box, double lat, double lon, int w, int h)
         {
@@ -724,7 +742,8 @@ namespace ClaudeCurtain
             double dLat = hk / KmPerDegree, dLon = wk / kmLon;
             double cLat = double.IsNaN(lat) ? midLat : lat, cLon = double.IsNaN(lon) ? (box.West + box.East) / 2 : lon;
             double westShare = double.IsNaN(lon) ? 0.5 : 1 / CurtainPainter.Phi;
-            double s = Math.Max(box.South, Math.Min(box.North - dLat, cLat - dLat / 2));
+            double southShare = double.IsNaN(lat) ? 0.5 : 1 - 1 / CurtainPainter.Phi;
+            double s = Math.Max(box.South, Math.Min(box.North - dLat, cLat - dLat * southShare));
             double we = Math.Max(box.West, Math.Min(box.East - dLon, cLon - dLon * westShare));
             return new GeoBox(s, we, s + dLat, we + dLon);
         }

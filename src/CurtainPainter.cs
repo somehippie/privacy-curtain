@@ -15,7 +15,8 @@ namespace ClaudeCurtain
     /// Draws the curtain. Everything follows one proportional system built on the golden ratio φ ≈ 1.618.
     ///
     /// Grid    On a landscape screen the composition is two columns whose widths are φ : 1: the time, the
-    ///         weather map and the message on the left, live data on the right, a hairline between them. On a
+    ///         weather map and the message on the left, live data on the right, a hairline between them; the
+    ///         forecast's header shares the map's header line, so the weather starts at one height. On a
     ///         portrait screen the data moves under the message. The composition rests on the screen's golden
     ///         section (the space above it and the space below it are 1 : φ).
     /// Type    One family (Bahnschrift, a DIN design that ships with Windows). Every size is the clock size
@@ -526,14 +527,17 @@ namespace ClaudeCurtain
                         mapMinH = (float)Math.Round(Math.Max(leftW / (Phi * Phi * Phi), pinH + st(3)));
                     }
 
-                    // ---------------- right column: measured, then placed on the grid
-                    float need = RightColumn(null, m, s, fData, fLabel, fSmall, track, unit, st, 0, 0, 0);
+                    // ---------------- right column: measured, then placed on the grid. Beside the map, the
+                    // forecast's header shares a line with the map's, so the weather starts at one height
+                    // across the page (and the map gets the room the forecast takes below it).
+                    float need = RightColumn(null, m, s, fData, fLabel, fSmall, track, unit, st, 0, 0, 0, 0);
                     L.HasRight = need > 0;
+                    float forecastAt = hasMap && landscape ? mapHead : 0;
                     // the message's last baseline, laid out naturally
                     float lastLine = hasMap ? mapTop + mapMinH + st(3) + msgH : yDate + st(3) + pinH + st(3) + msgH;
                     if (L.HasRight && landscape)
                     {
-                        float rightH = RightColumn(new List<Op>(), m, s, fData, fLabel, fSmall, track, unit, st, need, 0, 0);
+                        float rightH = RightColumn(new List<Op>(), m, s, fData, fLabel, fSmall, track, unit, st, need, 0, 0, forecastAt);
                         lastLine = Math.Max(lastLine, rightH - fSmall.Font.Size * 0.35f);
                     }
                     float ruleTop = (float)Math.Round(lastLine - msgH);
@@ -576,7 +580,7 @@ namespace ClaudeCurtain
                         }
                     }
                     float rightBottom = L.HasRight
-                        ? RightColumn(ops, m, s, fData, fLabel, fSmall, track, unit, st, rightW, colX, colY)
+                        ? RightColumn(ops, m, s, fData, fLabel, fSmall, track, unit, st, rightW, colX, colY, landscape ? forecastAt : 0)
                         : 0;
                     if (L.HasRight && landscape)
                     {
@@ -681,7 +685,8 @@ namespace ClaudeCurtain
             float spacing = Math.Max(unit * 0.8f, Measure(m, "100°", fData.Font, 0) * 2.4f);
             Func<List<PlacedStation>> pick = () => WeatherMap.PickStations(map.Stations, crop, mw, mh, s.Lat, s.Lon, labelBox, spacing, pad,
                                                                          band + pad * 0.5f, taken, WeatherMap.MaxStations);
-            string tideKey = PlaceTide(m, L, map.Tide, mw, mh, s.Now, pad, band, taken, pick());
+            string tideKey = PlaceTide(m, L, map.Tide, mw, mh, s.Now, pad, band, taken, pick(),
+                                       r => WeatherMap.WaterShare(map, crop, mw, mh, r));
             L.MapStations = pick();
             StringBuilder labels = new StringBuilder();
             foreach (PlacedStation p in L.MapStations)
@@ -698,11 +703,14 @@ namespace ClaudeCurtain
         /// day's curve from four hours ago with now on it, the height now and an arrow, rising or falling; then
         /// the next low and high in the order they come, each with its time, its height and the change from the
         /// high or low before ("−6.1": the water drops 6.1 ft). It takes the top corner that hides fewer
-        /// temperatures, on a tie the east one (where the weather has already gone by), and never covers home.
-        /// Returns a key for what it shows ("-" when there is no tide, or no room).
+        /// temperatures; on a tie the one over more water (the tide's own element, with no towns or hills to
+        /// hide), then the east one (where the weather has already gone by). It never covers home. water tells
+        /// how much of a part of the map is water. Returns a key for what it shows ("-" when there is no tide,
+        /// or no room).
         /// </summary>
         private static string PlaceTide(Graphics m, Layout L, MapTide tide, int mw, int mh, DateTime nowLocal,
-                                        float pad, float band, List<RectangleF> taken, List<PlacedStation> shown)
+                                        float pad, float band, List<RectangleF> taken, List<PlacedStation> shown,
+                                        Func<RectangleF, double> water)
         {
             L.MapTide = null;
             if (tide == null) return "-";
@@ -745,7 +753,7 @@ namespace ClaudeCurtain
             };
             int hideEast = hides(east), hideWest = hides(west);
             if (hideEast == int.MaxValue && hideWest == int.MaxValue) return "-";
-            t.Panel = hideWest < hideEast ? west : east;
+            t.Panel = hideWest < hideEast || (hideWest == hideEast && water(west) > water(east)) ? west : east;
 
             float left = t.Panel.Left, top = t.Panel.Top;
             t.LabelX = left + padX;
@@ -1067,10 +1075,12 @@ namespace ClaudeCurtain
         /// height comes from templates of the widest content a slot can hold, never from the live values, so
         /// changing numbers can never resize or move the composition. With ops null it only measures and
         /// returns the width it needs; otherwise it lays everything out at the given width and position and
-        /// returns the bottom edge.
+        /// returns the bottom edge. forecastAt, when it is lower than the forecast header's own place, is the
+        /// baseline the header moves down to (the map's header beside it).
         /// </summary>
         private static float RightColumn(List<Op> ops, Graphics m, DisplayState s, Face fData, Face fLabel, Face fSmall,
-                                         float track, float unit, Func<double, float> st, float width, float ox, float oy)
+                                         float track, float unit, Func<double, float> st, float width, float ox, float oy,
+                                         float forecastAt)
         {
             bool measure = ops == null;
             if (measure) ops = new List<Op>();
@@ -1176,6 +1186,7 @@ namespace ClaudeCurtain
                 float w = Math.Max(width, tableW);
 
                 y += fLabel.CapHeight;
+                if (forecastAt > y) y = forecastAt;
                 AddText(ops, m, head, fLabel, Tertiary, ox, y, track);
                 if (side.Length > 0) AddText(ops, m, side, fLabel, Tertiary, ox + w - Measure(m, side, fLabel.Font, track), y, track);
                 y += st(6) * 0.8f;
@@ -1208,7 +1219,7 @@ namespace ClaudeCurtain
                 }
 
                 // ---- the next six hours: hour, symbol, temperature on a curve, chance of rain
-                y += st(4.5) + fLabel.CapHeight;
+                y += st(4) + fLabel.CapHeight;
                 AddText(ops, m, "NEXT 6 HOURS", fLabel, Tertiary, ox, y, track);
                 float slot = w / 6f;
                 float hourBase = y + st(5) + fLabel.CapHeight;
@@ -1256,7 +1267,7 @@ namespace ClaudeCurtain
                 y = popBase + fLabel.Font.Size * 0.35f;
 
                 // ---- the next three days (three rows are always reserved)
-                y += st(4.5) + fLabel.CapHeight;
+                y += st(4) + fLabel.CapHeight;
                 AddText(ops, m, "NEXT 3 DAYS", fLabel, Tertiary, ox, y, track);
                 y += st(5) + fData.CapHeight;
                 float rowPitch = line2 + st(4) * 0.95f + fData.CapHeight;
