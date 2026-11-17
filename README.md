@@ -4,7 +4,7 @@ A black screen that covers every monitor and blocks the physical keyboard and mo
 (injected) clicks, typing and screenshots keep working underneath. It's for hiding an automated session on
 a machine you share a room with, without taking the machine away from yourself.
 
-![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone, a weather map below it showing a band of rain approaching a coast from the west over shaded hills with contour lines, with temperatures, a windy coast and the tide labelled, the message "PC in use by Claude", and a data column with ten-minute CPU and network sparklines, memory and disk bars, then the forecast: humidity, wind, sunrise and sunset, the next six hours as a temperature curve over rain-chance bars, and three days](docs/curtain.png)
+![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone, a weather map below it showing a band of rain approaching a coast from the west over shaded hills with contour lines, with temperatures, a windy coast and a tide chart in a corner, the message "PC in use by Claude", and a data column with ten-minute CPU and network sparklines, memory and disk bars, then the forecast: humidity, wind, sunrise and sunset, the next six hours as a temperature curve over rain-chance bars, and three days](docs/curtain.png)
 
 Awareness, not lockout: it counts and logs every blocked key press, click and escape attempt, can ping your
 phone while someone is at the keyboard, and shows a "While you were away" summary when you unlock. The
@@ -220,9 +220,13 @@ about what it is doing. Everything on it comes from one proportional system buil
   five-step legend), clouds and fog in warm white, never brighter than the body text, so the clock stays
   the brightest thing on screen. Under the weather the land's relief stays ground rather than picture: lit
   slopes, a faint warm tint on high ground and hairline contours every 200 m, like a topographic print.
-  Over it, a few labels with a dark halo: station temperatures spread across the map, wind only where it
-  is notable, and the tide as a tiny curve of the next day. The PIN row shares the map's lowest band:
-  while a PIN is typed the map fades to black, and it comes back when the row clears.
+  Over it, a few labels with a dark halo: station temperatures spread across the map, and wind only where
+  it is notable. The tide has an inset in one of the top corners, on a dark ground under a title ruled
+  like the map's own header ("TIDE · RISING"): a day of the tide from four hours ago as a line over a soft
+  fill, now as a bright dot on the curve, and the time of each high above it and each low below it. It
+  takes the top corner that hides fewer temperatures, on a tie the east one, where the weather has already
+  gone by. The PIN row shares the map's lowest band: while a PIN is typed the map fades to black, and it
+  comes back when the row clears.
 - **Colour.** Warm neutrals in four text tones and one accent, the short terracotta rule. The self-tests
   compute each tone's contrast on black: every text tone meets WCAG AA (the faintest labels are 4.9 : 1)
   and body text and values meet AAA (7.7 : 1). Overnight (10:30 PM to 6:30 AM, with hour-long ramps) the
@@ -253,8 +257,10 @@ preview mode:
 
 `--test-state` is one of idle, typing, wrong, shake, cooldown, admin, bright, night, summary, or radar or
 clouds to force the map's mode; `--preview-seconds N` shows the drift position N seconds in. With
-`--local-dir` pointing at a folder that has a `map.txt`, the preview uses that real map; otherwise it draws
-a made-up sample place (a coast, a river and a lake), which is what the images here show.
+`--local-dir` pointing at a folder that has a `map.txt`, the preview uses that real map, at the real time
+and with the real hourly forecast; otherwise it draws a made-up sample place (a coast, a river and a lake),
+which is what the images here show. To share a picture of your own map, add `--hide-home`: it leaves the
+home dot off and centres the map on your place rounded to a tenth of a degree, not on the place itself.
 
 ## On-screen info
 
@@ -319,9 +325,9 @@ And in the left column:
     gusts well above that, so a windy coast stands out and calm places stay a plain number.
   - **The tide** at the nearest NOAA tide station that keeps its own predictions (a "reference" station)
     within 60 km, found once per place from NOAA's station list. Its predicted highs and lows (NOAA CO-OPS,
-    refreshed every 6 hours) become one label at the station: a small curve of the next 24 hours starting
-    from a dot at the height now, and the next high or low, "High 4:43 PM". Inland there is no station and
-    no label.
+    refreshed every 6 hours) become the tide inset: the usual cosine curve between each high and low, from
+    four hours ago to a day later, with now on it, "RISING" or "FALLING", and the times of the highs and
+    lows. Inland there is no station and no inset.
 
   `curtain-weather.ps1` fetches all of this into `local\` alongside the forecast (`map.txt` lists the
   pictures, the station reports and the tide) and, in the background, refreshes it every 5 minutes
@@ -368,7 +374,7 @@ Please read these before relying on the curtain.
 ```
 
 They use a throwaway PIN in `local\test` and never touch the real one, and they never call your notify
-hook. The self-tests (~119 checks, including PIN hashing/entry rules, which key presses belong to your own
+hook. The self-tests (~122 checks, including PIN hashing/entry rules, which key presses belong to your own
 unlock, the time-zone label, the stats sampler, weather-file reading, and the design: every state rendered
 at 720p, 1080p, 16:10, 1440p, ultrawide and portrait, fitting the screen, the columns exactly φ : 1,
 staying on screen through 8 hours of drift, a fixed frame whatever the readings, the hourly forecast file,
@@ -377,7 +383,8 @@ and settling; and the weather map: its place in the layout, every radar colour r
 map file and its pictures, stale and missing pictures, radar or clouds, which part of the area shows, the
 replay's timing, the sun's height, the replay and the PIN veil letting the screen rest, station reports,
 elevation tiles decoded and stitched in the right places, the tide curve through each high and low, which
-stations get a label, labels never overlapping, and the relief being drawn) and the full
+stations get a label, labels never overlapping, the relief being drawn, the tide inset's corner and its
+times above and below the curve, and `--hide-home` leaving home off the map) and the full
 lifecycle suite (100+ checks: a screenshot seeing the
 desktop through the curtain, injected clicks and typing passing through, simulated shutdown, every hang
 being recovered, the keep-awake request appearing with the curtain and vanishing with it, the alerts, the

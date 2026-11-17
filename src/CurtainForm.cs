@@ -41,6 +41,7 @@ namespace ClaudeCurtain
         public double Lat = double.NaN, Lon = double.NaN;   // where the forecast is for (sunrise and sunset, home on the map)
         public WeatherMap Map;           // radar and satellite pictures (null = no map)
         public int MapMode;              // 0 = radar or clouds as the weather decides; 1 = radar; 2 = clouds (previews)
+        public bool HideHome;            // previews to share: no home on the map (and Lat, Lon rounded to 0.1°)
 
         /// <summary>Everything that changes what is drawn, apart from where it sits (the drift).</summary>
         public string ContentKey()
@@ -50,7 +51,7 @@ namespace ClaudeCurtain
                    Cpu + "|" + Ram + "|" + Net + "|" + Uptime + "|" + Disk + "|" +
                    (Sys == null ? "-" : Sys.Version.ToString(CultureInfo.InvariantCulture)) + "|" +
                    NightDim.ToString("0.00", CultureInfo.InvariantCulture) + "|" + HourlyKey + "|" +
-                   (Map == null ? "" : Map.Key) + "|" + MapMode + "|" +
+                   (Map == null ? "" : Map.Key) + "|" + MapMode + (HideHome ? "h" : "") + "|" +
                    (Weather == null ? "" : string.Join("¦", Weather));
         }
 

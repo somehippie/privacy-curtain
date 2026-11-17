@@ -59,6 +59,7 @@ namespace ClaudeCurtain
         public int PreviewSeconds;    // preview only: the drift position, as seconds since the curtain started
         public bool PreviewOverlay;   // preview only: draw the construction (grid, margins, type scale) on top
         public bool PreviewDrift;     // preview only: plot the drift path instead of the curtain
+        public bool PreviewHideHome;  // preview only: leave home off the map, for a picture to share
 
         // The notify hook used for phone/desktop alerts. Empty string or "none" disables hook calls
         // (alerts are still logged). Null means "resolve the default under the user's .claude\hooks".
@@ -125,6 +126,7 @@ namespace ClaudeCurtain
                         case "--test-state": o.TestState = Next(args, ref i); break;
                         case "--preview-seconds": o.PreviewSeconds = int.Parse(Next(args, ref i), CultureInfo.InvariantCulture); break;
                         case "--overlay": o.PreviewOverlay = true; break;
+                        case "--hide-home": o.PreviewHideHome = true; break;
                         case "--render-drift": o.Mode = Mode.Preview; o.PreviewDrift = true; o.PreviewFile = Next(args, ref i); break;
                         case "--notify-hook": o.NotifyHook = Next(args, ref i); break;
                         default:

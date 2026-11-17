@@ -762,16 +762,48 @@ namespace ClaudeCurtain
                 DisplayState s = CurtainPreview.Sample(po, "idle");
                 CurtainPainter.Layout l = CurtainPainter.Compose(s, 2560, 1440);
                 bool apart = true;
-                RectangleF tideBox = l.MapTideBox;
+                CurtainPainter.TideChart tc = l.MapTide;
                 for (int i = 0; i < l.MapStations.Count; i++)
                 {
-                    if (l.MapStations[i].Box.IntersectsWith(tideBox)) apart = false;
+                    if (tc != null && l.MapStations[i].Box.IntersectsWith(tc.Panel)) apart = false;
                     for (int j = i + 1; j < l.MapStations.Count; j++) if (l.MapStations[i].Box.IntersectsWith(l.MapStations[j].Box)) apart = false;
                 }
                 Check("map: the sample shows station temperatures (wind where it blows) and the tide, with no label over another",
-                      l.MapStations.Count >= 4 && l.MapStations.Exists(p => WeatherMap.Windy(p.Station)) && l.MapTideCurve != null &&
-                      l.MapTideText.StartsWith("High ", StringComparison.Ordinal) && apart);
+                      l.MapStations.Count >= 4 && l.MapStations.Exists(p => WeatherMap.Windy(p.Station)) && tc != null && apart);
+                if (tc != null)
+                {
+                    float nowX = tc.Plot.Left + tc.Plot.Width * CurtainPainter.TidePastHours / CurtainPainter.TideHours;
+                    bool corner = tc.Panel.Top > 0 && tc.Panel.Right < l.Map.Width && tc.Panel.Left > l.Map.Width / 2f && tc.Panel.Bottom < l.Map.Height / 2f;
+                    bool written = tc.Marks.Count == 3 && tc.Marks.TrueForAll(k =>
+                        (k.High ? k.Baseline < tc.Plot.Top : k.Baseline - l.Label.CapHeight > tc.Plot.Bottom) &&
+                        k.X >= tc.Panel.Left && k.X + 10 <= tc.Panel.Right && !k.Past);
+                    Check("tide: the sample's inset takes the top right corner, \"TIDE · RISING\", now a sixth of the way along the day, highs' times above the curve and lows' below",
+                          corner && tc.Title.StartsWith("TIDE", StringComparison.Ordinal) && tc.Title.EndsWith("RISING", StringComparison.Ordinal) &&
+                          Math.Abs(tc.Curve[tc.Now].X - nowX) < 0.5f && written && tc.Marks.FindAll(k => k.High).Count == 2);
+
+                    // Two more temperatures under that corner: now the west one hides fewer, so the inset moves there.
+                    DisplayState busy = CurtainPreview.Sample(po, "idle");
+                    GeoBox bc = l.MapCrop;
+                    List<MapStation> more = new List<MapStation>(busy.Map.Stations);
+                    for (int i = 0; i < 2; i++)
+                    {
+                        float x = tc.Panel.Left + tc.Panel.Width * (0.2f + 0.6f * i), y = tc.Panel.Top + tc.Panel.Height * 0.5f;
+                        more.Add(new MapStation { Id = "S9" + i, TempF = 70 + i, Utc = busy.Now.ToUniversalTime(),
+                                                  Lat = bc.North - y / l.Map.Height * (bc.North - bc.South), Lon = bc.West + x / l.Map.Width * (bc.East - bc.West) });
+                    }
+                    busy.Map.Stations = more.ToArray();
+                    CurtainPainter.Layout bl = CurtainPainter.Compose(busy, 2560, 1440);
+                    Check("tide: with more temperatures under the east corner, the inset takes the west one, clear of every label",
+                          bl.MapTide != null && bl.MapTide.Panel.Right < bl.Map.Width / 2f && !bl.MapStations.Exists(p => p.Box.IntersectsWith(bl.MapTide.Panel)));
+                    bl.Dispose();
+                }
                 l.Dispose();
+
+                // A picture to share: no home on the map.
+                DisplayState shared = CurtainPreview.Sample(new Options { LocalDir = po.LocalDir, PreviewHideHome = true }, "idle");
+                CurtainPainter.Layout hl = CurtainPainter.Compose(shared, 2560, 1440);
+                Check("preview --hide-home: home is left off the map", shared.HideHome && float.IsNaN(hl.MapHome.X));
+                hl.Dispose();
 
                 WeatherMap relief = s.Map;
                 WeatherMap flat = new WeatherMap { Box = relief.Box, BaseW = relief.BaseW, BaseH = relief.BaseH, Water = relief.Water, BaseId = "selftest-flat" };

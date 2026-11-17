@@ -13,10 +13,12 @@ namespace ClaudeCurtain
     /// <summary>
     /// Paints the curtain into a PNG instead of showing it (--render-preview). The real curtain is excluded
     /// from screen capture by design, so this is how its design is reviewed and documented. Sample data is
-    /// fixed so renders are comparable; the forecast is the real local\weather.txt when there is one.
+    /// fixed so renders are comparable; the forecast is the real local\weather.txt when there is one, and
+    /// with a real map (local\map.txt) the time and the next hours are real too.
     ///
     ///   --test-state idle|typing|wrong|shake|cooldown|admin|bright|night   which moment to show;
     ///                       radar|clouds   the map in that mode whatever the weather says
+    ///   --hide-home         leave home off the map, for a picture to share
     ///   --overlay           draw the construction on top: the φ : 1 columns, the golden-section margins
     ///                       and the type scale
     ///   --render-drift PNG  instead, plot two hours of the drift path
@@ -117,11 +119,15 @@ namespace ClaudeCurtain
 
         internal static DisplayState Sample(Options o, string state)
         {
+            // With a real map (local\ has one) the picture shows the real time and the real hourly forecast, so
+            // it agrees with itself; otherwise everything is fixed sample data, so renders are comparable.
+            WeatherMap real = o.LocalDir != null ? WeatherMap.Load(o.LocalDir, DateTime.UtcNow) : null;
             DateTime now = new DateTime(2026, 11, 15, 10, 42, 0);
+            if (real != null) { DateTime c = DateTime.Now; now = new DateTime(c.Year, c.Month, c.Day, c.Hour, c.Minute, 0); }
             DisplayState s = new DisplayState();
             s.Clock = now.ToString("t", CultureInfo.GetCultureInfo("en-US"));
             s.Date = now.ToString("dddd, MMMM d", CultureInfo.GetCultureInfo("en-US"));
-            s.Zone = "PST, GMT−8";
+            s.Zone = real != null ? CurtainUi.ZoneText(now) : "PST, GMT−8";
             s.Drift = Math.Max(0, o.PreviewSeconds) * 5;   // Drift counts 200 ms ticks
             s.Cpu = "12%";
             s.Ram = "45% · 14.2/32 GB";
@@ -137,18 +143,36 @@ namespace ClaudeCurtain
             s.Lat = 45.0;     // a neutral sample place in the Pacific time zone, not anyone's home
             s.Lon = -122.0;
 
-            // The map: the real one when local\ has it (and then the real place, for home on it), else a made-up sample.
-            WeatherMap real = o.LocalDir != null ? WeatherMap.Load(o.LocalDir, DateTime.UtcNow) : null;
+            // The map: the real one when local\ has it (and then the real place, for home on it, and the real
+            // hours), else a made-up sample.
             if (real != null)
             {
-                double la, lo;
                 string hourly = Path.Combine(o.LocalDir, "weather-hourly.txt");
-                try { if (File.Exists(hourly) && SysStats.ParseLocation(File.ReadAllLines(hourly, Encoding.UTF8), out la, out lo)) { s.Lat = la; s.Lon = lo; } } catch { }
+                try
+                {
+                    if (File.Exists(hourly))
+                    {
+                        string[] all = File.ReadAllLines(hourly, Encoding.UTF8);
+                        double la, lo;
+                        if (SysStats.ParseLocation(all, out la, out lo)) { s.Lat = la; s.Lon = lo; }
+                        HourPoint[] hours = SysStats.ParseHourly(all);
+                        if (hours.Length > 0) { s.Hourly = hours; s.HourlyKey = "local"; }
+                    }
+                }
+                catch { }
                 s.Map = real;
             }
             else
             {
                 s.Map = WeatherMap.Sample(s.Lat, s.Lon, now.ToUniversalTime());
+            }
+            if (o.PreviewHideHome)
+            {
+                // A picture to share: no home on the map, which centres on the place rounded to 0.1° (as the
+                // downloads are) instead of on the place itself.
+                s.HideHome = true;
+                s.Lat = Math.Round(s.Lat, 1);
+                s.Lon = Math.Round(s.Lon, 1);
             }
 
             string wx = Path.Combine(o.LocalDir ?? "", "weather.txt");
