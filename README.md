@@ -4,7 +4,7 @@ A black screen that covers every monitor and blocks the physical keyboard and mo
 (injected) clicks, typing and screenshots keep working underneath. It's for hiding an automated session on
 a machine you share a room with, without taking the machine away from yourself.
 
-![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone, a weather map below it showing a band of rain approaching a coast from the west over shaded hills with contour lines, with temperatures, a windy coast and a tide table in a corner, the message "PC in use by Claude", and a data column with ten-minute CPU and network sparklines, memory and disk bars, then the forecast: humidity, wind, sunrise and sunset, the next six hours as a temperature curve over rain-chance bars, and three days](docs/curtain.png)
+![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone, a radar map of the San Francisco Bay Area below it with its hills shaded and contoured, a few light showers off the coast, temperatures around the Bay and a tide table in the corner, the message "PC in use by Claude", and a data column with ten-minute CPU and network sparklines, memory and disk bars, then the forecast: humidity, wind, sunrise and sunset, the next six hours as a temperature curve over rain-chance bars, and three days](docs/curtain.png)
 
 Awareness, not lockout: it counts and logs every blocked key press, click and escape attempt, can ping your
 phone while someone is at the keyboard, and shows a "While you were away" summary when you unlock. The
@@ -285,7 +285,8 @@ preview mode:
 clouds to force the map's mode; `--preview-seconds N` shows the drift position N seconds in. With
 `--local-dir` pointing at a folder that has a `map.txt`, the preview uses that real map, at the real time
 and with the real hourly forecast; otherwise it draws a made-up sample place (a coast, a river and a lake),
-which is what the images here show. To share a picture of your own map, add `--hide-home`: it leaves the
+which is what the images here show, all but the first: that one is a real map of the Bay Area, rendered
+with `--hide-home`. To share a picture of your own map, add `--hide-home`: it leaves the
 home dot off and centres the map on your place rounded to a tenth of a degree, not on the place itself.
 
 ## On-screen info
