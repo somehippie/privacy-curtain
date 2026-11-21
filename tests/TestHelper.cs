@@ -58,6 +58,7 @@ namespace ClaudeCurtain.Tests
                     case "keys": return KeyTaps(args);
                     case "capture": return Capture(args);
                     case "harness": return Harness(args);
+                    case "ghost": return Ghost(args);
                 }
                 Console.WriteLine("unknown command " + args[0]);
                 return 2;
@@ -442,6 +443,90 @@ namespace ClaudeCurtain.Tests
             }
         }
 
+        // ---------------------------------------------------------------- ghost
+        // ghost <statusFile> <seconds> <x> <y>   a small window titled "Curtain test ghost". Once it has
+        // keyboard focus it shrinks to 1 x 1 px far off screen and keeps the focus, like the invisible
+        // helper window a background service left in front on 2026-11-19. The curtain test treats it as
+        // elevated (--test-elevated-title) and expects the curtain to hand focus back.
+        private static int Ghost(string[] args)
+        {
+            string statusFile = args[1];
+            int seconds = Int(args[2]);
+            int x = Int(args[3]), y = Int(args[4]);
+            using (GhostForm form = new GhostForm(statusFile, seconds, x, y))
+            {
+                Application.Run(form);
+            }
+            return 0;
+        }
+
+        private sealed class GhostForm : Form
+        {
+            private readonly string statusFile;
+            private readonly DateTime closeAt;
+            private readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
+            private bool activated;
+            private bool hidden;
+            private bool hiddenWithFocus;
+            private Point centre;
+
+            public GhostForm(string statusFile, int seconds, int x, int y)
+            {
+                this.statusFile = statusFile;
+                closeAt = DateTime.UtcNow.AddSeconds(seconds);
+                Text = "Curtain test ghost";
+                AutoScaleMode = AutoScaleMode.None;
+                FormBorderStyle = FormBorderStyle.None;
+                BackColor = Color.FromArgb(0, 255, 255);
+                StartPosition = FormStartPosition.Manual;
+                Location = new Point(x, y);
+                ClientSize = new Size(220, 140);
+                TopMost = true;
+                ShowInTaskbar = false;
+                // Launched from the foreground process it may get focus at once; only focus that comes
+                // after the test arms it (by creating <status>.arm, then clicking it) counts.
+                Activated += delegate { if (File.Exists(statusFile + ".arm")) activated = true; };
+                timer.Interval = 100;
+                timer.Tick += delegate { Step(); };
+                timer.Start();
+            }
+
+            protected override bool ShowWithoutActivation { get { return true; } }
+
+            private void Step()
+            {
+                if (DateTime.UtcNow >= closeAt || File.Exists(statusFile + ".stop"))
+                {
+                    timer.Stop();
+                    Close();
+                    return;
+                }
+                if (!hidden) centre = PointToScreen(new Point(ClientSize.Width / 2, ClientSize.Height / 2));
+                bool foreground = GetForegroundWindow() == Handle;
+                if (activated && !hidden && foreground)
+                {
+                    SetWindowPos(Handle, IntPtr.Zero, -20000, -20000, 1, 1, 0x0010 | 0x0004);   // NOACTIVATE | NOZORDER
+                    hidden = true;
+                    hiddenWithFocus = GetForegroundWindow() == Handle;
+                }
+                string json = "{\"pid\":" + Process.GetCurrentProcess().Id +
+                              ",\"hwnd\":" + Handle.ToInt64() +
+                              ",\"x\":" + centre.X + ",\"y\":" + centre.Y +
+                              ",\"activated\":" + (activated ? "true" : "false") +
+                              ",\"hidden\":" + (hidden ? "true" : "false") +
+                              ",\"hiddenWithFocus\":" + (hiddenWithFocus ? "true" : "false") +
+                              ",\"foreground\":" + (foreground ? "true" : "false") + "}";
+                try
+                {
+                    string tmp = statusFile + ".tmp";
+                    File.WriteAllText(tmp, json);
+                    if (File.Exists(statusFile)) File.Replace(tmp, statusFile, null);
+                    else File.Move(tmp, statusFile);
+                }
+                catch { }
+            }
+        }
+
         // ---------------------------------------------------------------- displaywatch
         // displaywatch <seconds>   prints "off" if Windows turned the display off at any point, else "on".
         // If the display is off at the end it is woken again with a one-pixel injected mouse move.
@@ -556,6 +641,7 @@ namespace ClaudeCurtain.Tests
         [DllImport("user32.dll")] private static extern bool CloseDesktop(IntPtr desktop);
         [DllImport("user32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern bool GetUserObjectInformation(IntPtr obj, int index, StringBuilder info, int length, out int needed);
         [DllImport("user32.dll")] private static extern IntPtr GetForegroundWindow();
+        [DllImport("user32.dll")] private static extern bool SetWindowPos(IntPtr hwnd, IntPtr after, int x, int y, int cx, int cy, uint flags);
         [DllImport("user32.dll")] private static extern bool GetLastInputInfo(ref LASTINPUTINFO info);
         [DllImport("kernel32.dll")] private static extern uint GetTickCount();
         [DllImport("user32.dll")] private static extern bool GetCursorPos(out POINT point);

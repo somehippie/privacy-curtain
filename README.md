@@ -323,6 +323,19 @@ The data column:
 
 And in the left column:
 
+- **Now playing.** What Spotify (or a browser, or any player that reports to Windows' media controls, the
+  panel by the volume flyout) is playing, right of the clock and flush with the map's right edge, so it
+  mirrors the clock: "NOW PLAYING · SPOTIFY" (or "PAUSED"), the title, the artist on the clock's baseline
+  (with the album when there is room), and on the date's baseline the elapsed time, a thin progress line
+  and the length. It is read once a second on a thread of its own, through the Windows Runtime API
+  `GlobalSystemMediaTransportControlsSessionManager` (Windows 10 1809 or later), compiled against the
+  `.winmd` metadata in `System32\WinMetadata` that every Windows has, so nothing is installed. Apps report
+  the position only on play, pause and seek, so the line runs on from the last report. The still part is
+  redrawn only when the track changes; the line and the elapsed time are drawn live, five times a second. A
+  title too long to fit drops trailing extras first ("(feat. ...)", "[Live]", "- Remastered 2011"), then
+  ends in an ellipsis. Nothing shows when nothing plays, when a track has been paused for 15 minutes, or on
+  a portrait screen, where the clock leaves no room beside it. Previews show the real track (not with
+  `--hide-home`), or a sample one with `--test-state music`, `paused` or `music-long`.
 - **The weather map.** Radar when rain is near, clouds and fog otherwise. *Radar* shows when the next three
   hours of the hourly forecast have a 30% chance of rain or more, or rain, showers, storms or snow in their
   words, or when the radar shows at least light rain (20 dBZ) within 50 km. The source is NOAA's MRMS
@@ -394,6 +407,18 @@ Please read these before relying on the curtain.
   Manager, an admin shell) from the hooks, so physical keys reach that window. While one has focus the
   curtain says so and switches PIN entry to registered hotkeys. If the PIN seems dead, press the Windows key
   first.
+  - *Hidden ones.* A background service can leave a helper running as SYSTEM with a window nobody can see
+    holding keyboard focus (a game launcher's update once did this for an hour). When the elevated window in
+    front cannot be seen (not visible, minimised, cloaked, 4 px or smaller, off every screen, or fully
+    transparent), the curtain hands focus back to the last ordinary window that had it, or to the taskbar.
+    Windows refuses such a switch from a background process until 200 s pass with no input, unless that
+    process sent the latest input itself, so the curtain first sends a zero-pixel mouse move (nothing moves)
+    and tries straight after; then it retries every 2 s without the nudge, so it never keeps resetting those
+    200 s. A visible elevated window is left alone, and if a hidden one takes focus straight back, the
+    curtain stops fighting it. `curtain.log` says which way it went.
+  - *What the log keeps.* The elevated window is described by process, window class, place and size (no
+    title). The hotkey fallback logs the first key that reaches it, whether any did when it switches off,
+    and when the PIN came in through it; never how many keys, which would give away the PIN's length.
 - **Things Windows draws above every app** can show over the curtain: toast notifications, the Start menu,
   Alt+Tab, the volume popup. Turn on Focus Assist if toasts matter. The mouse pointer also stays visible.
 - **Games.** Apps that read raw input (most games) and game controllers are not blocked. Not tested with
@@ -407,7 +432,7 @@ Please read these before relying on the curtain.
 ```
 
 They use a throwaway PIN in `local\test` and never touch the real one, and they never call your notify
-hook. The self-tests (~127 checks, including PIN hashing/entry rules, which key presses belong to your own
+hook. The self-tests (~139 checks, including PIN hashing/entry rules, which key presses belong to your own
 unlock, the time-zone label, the stats sampler, weather-file reading, and the design: every state rendered
 at 720p, 1080p, 16:10, 1440p, ultrawide and portrait, fitting the screen, the columns exactly φ : 1, the
 forecast's header on the map's line,
@@ -418,13 +443,19 @@ map file and its pictures, stale and missing pictures, radar or clouds, which pa
 replay's timing, the sun's height, the replay and the PIN veil letting the screen rest, station reports,
 elevation tiles decoded and stitched in the right places, the tide curve through each high and low, which
 stations get a label, labels never overlapping, the relief being drawn, the tide table's corner (over the
-water on a tie) and its rows, and `--hide-home` leaving home off the map) and the full
+water on a tie) and its rows, and `--hide-home` leaving home off the map; and now playing: times, app names, the position running on
+between reports, its place beside the clock on every screen, shortened titles, and a live read of Windows'
+media controls) and the full
 lifecycle suite (100+ checks: a screenshot seeing the
 desktop through the curtain, injected clicks and typing passing through, simulated shutdown, every hang
 being recovered, the keep-awake request appearing with the curtain and vanishing with it, the alerts, the
 re-assert, the event log/summary, the summary window laid out at 720p, 1080p and 1440p with nothing
 clipped, and the launcher: which Claude Code sessions count, a session that has ended or whose process id was
-reused not counting, how its Remote Control switch starts, and its dialog answering through its file) both pass. The on-screen info
+reused not counting, how its Remote Control switch starts, and its dialog answering through its file) both pass. The desktop stage `admin-focus` treats a test
+window as elevated (`--test-elevated-title`, since a real one needs an administrator prompt): a window
+that takes focus and then shrinks to 1 x 1 px off screen loses it again within half a second; a visible
+one keeps it; and a PIN typed through the hotkey fallback is refused when wrong and accepted when right,
+without the digits reaching the window in front. The on-screen info
 panel and real physical key presses are not script-testable (the curtain is excluded from screen capture by
 design); a person-at-the-PC checklist is in the lifecycle test's output.
 

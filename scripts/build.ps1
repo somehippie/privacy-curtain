@@ -54,6 +54,10 @@ function Invoke-Csc([string]$Target, [string[]]$CscArgs) {
 $common = @('/nologo', '/optimize+', '/warn:4', '/platform:anycpu',
             '/r:System.dll', '/r:System.Core.dll', '/r:System.Drawing.dll', '/r:System.Windows.Forms.dll')
 
+# Windows' own media controls (what is playing, for NowPlaying.cs), from the metadata every Windows 10 has.
+$winmd = Join-Path $env:WINDIR 'System32\WinMetadata'
+$winrt = @("/r:$winmd\Windows.Foundation.winmd", "/r:$winmd\Windows.Media.winmd", "/r:$winmd\Windows.Storage.winmd",
+           "/r:$(Split-Path -Parent $csc)\System.Runtime.dll")
 # ---- the curtain ----
 $exe = Join-Path $bin 'ClaudeCurtain.exe'
 $manifest = Join-Path $srcDir 'app.manifest'
@@ -61,7 +65,7 @@ $icon = Join-Path $srcDir 'curtain.ico'   # drawn by make-icon.ps1
 $sources = @(Get-ChildItem $srcDir -Filter *.cs)
 $inputs = $sources + (Get-Item $manifest) + (Get-Item $icon) + (Get-Item $PSCommandPath)
 if ($Force -or -not (Test-UpToDate $exe $inputs)) {
-    Invoke-Csc $exe ($common + @('/target:winexe', "/win32manifest:$manifest", "/win32icon:$icon") + $sources.FullName)
+    Invoke-Csc $exe ($common + $winrt + @('/target:winexe', "/win32manifest:$manifest", "/win32icon:$icon") + $sources.FullName)
     Write-Host "Built $exe"
 } else {
     Write-Verbose 'ClaudeCurtain.exe is up to date.'

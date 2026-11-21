@@ -42,6 +42,7 @@ namespace ClaudeCurtain
         public WeatherMap Map;           // radar and satellite pictures (null = no map)
         public int MapMode;              // 0 = radar or clouds as the weather decides; 1 = radar; 2 = clouds (previews)
         public bool HideHome;            // previews to share: no home on the map (and Lat, Lon rounded to 0.1°)
+        public MediaInfo Media;          // what is playing (null = nothing); its position is drawn live
 
         /// <summary>Everything that changes what is drawn, apart from where it sits (the drift).</summary>
         public string ContentKey()
@@ -52,6 +53,7 @@ namespace ClaudeCurtain
                    (Sys == null ? "-" : Sys.Version.ToString(CultureInfo.InvariantCulture)) + "|" +
                    NightDim.ToString("0.00", CultureInfo.InvariantCulture) + "|" + HourlyKey + "|" +
                    (Map == null ? "" : Map.Key) + "|" + MapMode + (HideHome ? "h" : "") + "|" +
+                   (Media == null ? "" : Media.Key()) + "|" +
                    (Weather == null ? "" : string.Join("¦", Weather));
         }
 
@@ -234,6 +236,7 @@ namespace ClaudeCurtain
         private static readonly int[] KeyList = BuildKeys();
         private readonly KeyQueue queue;
         private bool registered;
+        private int caught;
 
         public HotkeyWindow(KeyQueue queue)
         {
@@ -247,6 +250,12 @@ namespace ClaudeCurtain
         }
 
         public bool Registered { get { return registered; } }
+
+        /// <summary>
+        /// How many keys arrived through the hotkeys since they were last registered. Only ever logged as
+        /// "none" or "some": a count would give away the PIN's length.
+        /// </summary>
+        public int Caught { get { return caught; } }
 
         private static int[] BuildKeys()
         {
@@ -262,6 +271,7 @@ namespace ClaudeCurtain
         public int Register()
         {
             if (registered) return 0;
+            caught = 0;
             int ok = 0;
             for (int i = 0; i < KeyList.Length; i++)
             {
@@ -289,6 +299,8 @@ namespace ClaudeCurtain
                 if (index >= 0 && index < KeyList.Length)
                 {
                     int vk = KeyList[index];
+                    // Logged once per stretch, so the log shows the fallback works without showing the PIN's length.
+                    if (caught++ == 0) Log.Write("hotkey fallback: the first key arrived");
                     queue.Push(vk == Native.VK_RETURN ? (vk | KeyQueue.FlagSubmit) : vk);
                 }
                 return;
@@ -338,6 +350,16 @@ namespace ClaudeCurtain
         private uint ownPid;
         private uint lastForegroundPid;
         private int ownIntegrity;
+        private IntPtr lastUserWindow;   // the last window in front that was not elevated
+        private int reclaimTries;
+        private int reclaimWait;
+        private int reclaimStarted;
+        private IntPtr reclaimedFrom;
+        private int reclaimedAt;
+        private IntPtr giveUpOn;
+
+        /// <summary>Test only: a window with exactly this title counts as elevated.</summary>
+        public string TestElevatedTitle { get; set; }
         private volatile bool freezeForTest;
 
         public CurtainUi(PinGate gate, InputHooks hooks, KeyQueue queue, string autoExitText, SysStats stats)
@@ -512,6 +534,7 @@ namespace ClaudeCurtain
                 s.Lat = stats.Latitude;
                 s.Lon = stats.Longitude;
                 s.Map = stats.Map;
+                s.Media = stats.Media;
             }
 
             string key = s.Key();
@@ -562,6 +585,8 @@ namespace ClaudeCurtain
         /// <summary>
         /// Windows hides input aimed at an elevated window from a normal process's hooks. Notice when such
         /// a window is in front, say so on the curtain, and switch the PIN keys over to hotkeys meanwhile.
+        /// If that window is one nobody can see (a background service's helper, as a game launcher's
+        /// update once left behind), hand focus back to the window that had it before.
         /// </summary>
         private void CheckForeground()
         {
@@ -578,14 +603,15 @@ namespace ClaudeCurtain
                     level = Integrity.OfProcess(foregroundPid, out denied);
                     if (level == Integrity.Unknown) admin = denied;
                     else admin = ownIntegrity != Integrity.Unknown && level > ownIntegrity;
+                    if (!admin && TestElevatedTitle != null && TitleOf(foreground) == TestElevatedTitle) admin = true;
+                    if (!admin) lastUserWindow = foreground;   // where focus goes back to
                 }
             }
 
             if (foregroundPid != lastForegroundPid)
             {
                 lastForegroundPid = foregroundPid;
-                string name = "";
-                try { if (foregroundPid != 0) name = Process.GetProcessById((int)foregroundPid).ProcessName; } catch { }
+                string name = ProcessNameOf(foregroundPid);
                 if (string.Equals(name, "Taskmgr", StringComparison.OrdinalIgnoreCase))
                 {
                     EventLog.TaskManager++;
@@ -594,22 +620,139 @@ namespace ClaudeCurtain
                 }
             }
 
-            if (admin == adminForeground) return;
-            adminForeground = admin;
-            if (admin)
+            if (admin != adminForeground)
             {
-                EventLog.AdminFocus++;
-                EventLog.Write("admin-window", "an administrator window took keyboard focus; physical keys can reach it");
-                CurtainApp.RaiseAlert("admin-window", "an administrator window took focus; physical keys can reach it behind the curtain");
-                int count = hotkeys.Register();
-                Log.Write("an elevated window has focus (pid " + foregroundPid + ", integrity 0x" + level.ToString("X") +
-                          "): hooks cannot see its input, PIN hotkey fallback on (" + count + " keys)");
+                adminForeground = admin;
+                if (admin)
+                {
+                    EventLog.AdminFocus++;
+                    EventLog.Write("admin-window", "an administrator window took keyboard focus; physical keys can reach it");
+                    CurtainApp.RaiseAlert("admin-window", "an administrator window took focus; physical keys can reach it behind the curtain");
+                    int count = hotkeys.Register();
+                    Log.Write("an elevated window has focus (pid " + foregroundPid + ", integrity 0x" + level.ToString("X") +
+                              ", " + Describe(foreground) + "): hooks cannot see its input, PIN hotkey fallback on (" + count + " keys)");
+                    reclaimTries = 0;
+                    reclaimWait = 0;
+                }
+                else
+                {
+                    bool caught = hotkeys.Caught > 0;
+                    hotkeys.Unregister();
+                    Log.Write("focus left the elevated window: PIN hotkey fallback off (" +
+                              (caught ? "keys arrived through it" : "no keys arrived through it") + ")");
+                }
             }
-            else
+
+            if (admin) ReclaimFromHidden(foreground);
+        }
+
+        /// <summary>
+        /// An elevated window nobody can see has focus: give focus back to the window that had it, or else
+        /// to the taskbar (what pressing the Windows key does). A window the user can see is left alone;
+        /// it is theirs to use. Windows refuses a background process's focus change until 200 s pass with
+        /// no input (ForegroundLockTimeout), unless that process sent the latest input itself, so the
+        /// first tries come right after a zero-pixel mouse move from the curtain (AttachThreadInput did
+        /// not help in testing). Later tries, every 2 s while the window keeps focus, skip the nudge so
+        /// they cannot keep resetting that 200 s. If the same window takes focus straight back, the
+        /// curtain stops fighting it and the on-screen hint (press the Windows key) stays.
+        /// </summary>
+        private void ReclaimFromHidden(IntPtr foreground)
+        {
+            if (foreground == giveUpOn) return;
+            string why = HiddenReason(foreground);
+            if (why == null) return;
+            if (reclaimWait > 0) { reclaimWait--; return; }
+            reclaimWait = 4;   // CheckForeground runs every 400 ms
+
+            if (foreground == reclaimedFrom && Environment.TickCount - reclaimedAt < 10000)
             {
-                hotkeys.Unregister();
-                Log.Write("focus left the elevated window: PIN hotkey fallback off");
+                giveUpOn = foreground;
+                Log.Write("the hidden elevated window took focus straight back; leaving it be (press the Windows key)");
+                return;
             }
+
+            IntPtr target = lastUserWindow;
+            if (target == IntPtr.Zero || !Native.IsWindow(target) || !Native.IsWindowVisible(target) || Native.IsIconic(target))
+                target = Native.FindWindow("Shell_TrayWnd", null);
+            if (target == IntPtr.Zero) return;
+
+            reclaimTries++;
+            if (reclaimTries == 1) reclaimStarted = Environment.TickCount;
+            Native.SetForegroundWindow(target);
+            string how = "directly";
+            if (Native.GetForegroundWindow() != target && reclaimTries <= 3)
+            {
+                if (Native.NudgeMouse())
+                {
+                    Native.SetForegroundWindow(target);
+                    how = "after a zero-pixel mouse nudge";
+                }
+                else how = "the nudge was refused, error " + Marshal.GetLastWin32Error();
+            }
+            if (Native.GetForegroundWindow() == target)
+            {
+                reclaimedFrom = foreground;
+                reclaimedAt = Environment.TickCount;
+                Log.Write("took focus back from a hidden elevated window (" + why + ") " + how + " and gave it to " + Describe(target) +
+                          (reclaimTries > 1 ? ", " + ((Environment.TickCount - reclaimStarted) / 1000) + " s after the first try" : ""));
+                EventLog.Write("focus-back", "the curtain took focus back from a hidden administrator window");
+            }
+            else if (reclaimTries == 1)
+            {
+                Log.Write("could not take focus back from a hidden elevated window (" + why + ") yet (" + how + "; target " +
+                          Describe(target) + "); Windows allows it once 200 s pass with no input, so trying every 2 s");
+            }
+        }
+
+        /// <summary>Why a window cannot be seen, or null when it can.</summary>
+        internal static string HiddenReason(IntPtr hwnd)
+        {
+            if (!Native.IsWindowVisible(hwnd)) return "not visible";
+            if (Native.IsIconic(hwnd)) return "minimised";
+            int cloaked;
+            if (Native.DwmGetWindowAttribute(hwnd, Native.DWMWA_CLOAKED, out cloaked, 4) == 0 && cloaked != 0) return "cloaked";
+            Native.RECT r;
+            if (Native.GetWindowRect(hwnd, out r))
+            {
+                int w = r.Right - r.Left, h = r.Bottom - r.Top;
+                if (w <= 4 || h <= 4) return "only " + w + " x " + h + " px";
+            }
+            if (Native.MonitorFromWindow(hwnd, Native.MONITOR_DEFAULTTONULL) == IntPtr.Zero) return "off every screen";
+            if ((Native.GetWindowLong(hwnd, Native.GWL_EXSTYLE) & Native.WS_EX_LAYERED) != 0)
+            {
+                uint key, flags;
+                byte alpha;
+                if (Native.GetLayeredWindowAttributes(hwnd, out key, out alpha, out flags) &&
+                    (flags & Native.LWA_ALPHA) != 0 && alpha == 0) return "fully transparent";
+            }
+            return null;
+        }
+
+        /// <summary>Process, window class, place and visibility: enough to recognise a window later, without its title.</summary>
+        private static string Describe(IntPtr hwnd)
+        {
+            uint pid;
+            Native.GetWindowThreadProcessId(hwnd, out pid);
+            StringBuilder cls = new StringBuilder(128);
+            Native.GetClassName(hwnd, cls, cls.Capacity);
+            Native.RECT r;
+            string place = Native.GetWindowRect(hwnd, out r)
+                ? r.Left + "," + r.Top + " " + (r.Right - r.Left) + "x" + (r.Bottom - r.Top) : "?";
+            string hidden = HiddenReason(hwnd);
+            return ProcessNameOf(pid) + ", class " + cls + ", " + place + ", " + (hidden ?? "visible");
+        }
+
+        private static string ProcessNameOf(uint pid)
+        {
+            try { if (pid != 0) return Process.GetProcessById((int)pid).ProcessName; } catch { }
+            return "?";
+        }
+
+        private static string TitleOf(IntPtr hwnd)
+        {
+            StringBuilder title = new StringBuilder(256);
+            Native.GetWindowText(hwnd, title, title.Capacity);
+            return title.ToString();
         }
     }
 }

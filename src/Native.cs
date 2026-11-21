@@ -272,5 +272,64 @@ namespace ClaudeCurtain
 
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         public static extern int GetWindowText(IntPtr hWnd, System.Text.StringBuilder text, int max);
+
+        // ---- the foreground window: what it looks like, and handing focus back (all read-only but the last) ----
+        public const int GWL_EXSTYLE = -20;
+        public const int DWMWA_CLOAKED = 14;
+        public const uint MONITOR_DEFAULTTONULL = 0;
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool IsWindow(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern int GetClassName(IntPtr hWnd, System.Text.StringBuilder name, int max);
+
+        [DllImport("user32.dll", EntryPoint = "GetWindowLongW")]
+        public static extern int GetWindowLong(IntPtr hWnd, int index);
+
+        [DllImport("user32.dll")]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool GetLayeredWindowAttributes(IntPtr hWnd, out uint key, out byte alpha, out uint flags);
+
+        [DllImport("user32.dll")]
+        public static extern IntPtr MonitorFromWindow(IntPtr hWnd, uint flags);
+
+        [DllImport("dwmapi.dll")]
+        public static extern int DwmGetWindowAttribute(IntPtr hWnd, int attribute, out int value, int size);
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        public static extern IntPtr FindWindow(string className, string windowName);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool SetForegroundWindow(IntPtr hWnd);
+
+        // One injected mouse event, used only to hand focus back (see CurtainUi.ReclaimFromHidden).
+        public const uint INPUT_MOUSE = 0;
+        public const uint MOUSEEVENTF_MOVE = 0x0001;
+
+        [StructLayout(LayoutKind.Sequential)]
+        public struct MOUSEINPUT { public int dx, dy; public uint mouseData, dwFlags, time; public IntPtr dwExtraInfo; }
+
+        // The union's largest member is MOUSEINPUT, so a mouse-only INPUT has the right size on both 32 and 64 bit.
+        [StructLayout(LayoutKind.Sequential)]
+        public struct INPUT { public uint type; public MOUSEINPUT mi; }
+
+        [DllImport("user32.dll", SetLastError = true)]
+        public static extern uint SendInput(uint count, [In] INPUT[] inputs, int size);
+
+        /// <summary>A mouse "move" of zero pixels: nothing moves, but Windows counts it as input from this process.</summary>
+        public static bool NudgeMouse()
+        {
+            INPUT[] input = new INPUT[1];
+            input[0].type = INPUT_MOUSE;
+            input[0].mi.dwFlags = MOUSEEVENTF_MOVE;
+            return SendInput(1, input, Marshal.SizeOf(typeof(INPUT))) == 1;
+        }
     }
 }

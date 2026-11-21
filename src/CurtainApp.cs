@@ -149,9 +149,11 @@ namespace ClaudeCurtain
 
             sysStats = new SysStats(o.LocalDir);
             try { sysStats.Sample(); } catch { }   // seed RAM / uptime / weather for the very first paint
+            try { sysStats.StartMedia(); } catch { }
 
             Application.EnableVisualStyles();
             ui = new CurtainUi(gate, hooks, queue, AutoExitText(), sysStats);
+            ui.TestElevatedTitle = o.TestElevatedTitle;
             string error = ui.Create();
             if (error != null)
             {
@@ -175,7 +177,8 @@ namespace ClaudeCurtain
                       ", watchdog pid " + watchdog.Id +
                       (o.TestPinFromInjected ? ", TEST: PIN accepted from injected keys" : "") +
                       (o.TestFreezeTarget != null ? ", TEST: freeze " + o.TestFreezeTarget + "@" + o.TestFreezeAfter : "") +
-                      (o.TestKeys != null ? ", TEST: scripted keys@" + o.TestKeysAfter : ""));
+                      (o.TestKeys != null ? ", TEST: scripted keys@" + o.TestKeysAfter : "") +
+                      (o.TestElevatedTitle != null ? ", TEST: windows titled '" + o.TestElevatedTitle + "' count as elevated" : ""));
 
             EventLog.Write("start", "curtain up on " + ui.MonitorCount + " monitor(s), timer " + EventLog.Span(o.Seconds) +
                            ", closes by itself at " + deadlineUtc.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture));
@@ -308,7 +311,11 @@ namespace ClaudeCurtain
                         if (gate.OnKey(code & 0xFF, (code & KeyQueue.FlagUp) != 0, submit, (code & KeyQueue.FlagCounted) != 0, now))
                         {
                             // The hotkey fallback fires on key-down: let Enter come back up before leaving.
-                            if (submit) WaitForRelease(Native.VK_RETURN, 1500);
+                            if (submit)
+                            {
+                                Log.Write("the PIN came in through the hotkey fallback");
+                                WaitForRelease(Native.VK_RETURN, 1500);
+                            }
                             ExitNow("pin", ExitCode.Ok);
                             return;
                         }

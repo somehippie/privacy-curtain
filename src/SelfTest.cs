@@ -23,6 +23,7 @@ namespace ClaudeCurtain
                 TestAlerter(o);
                 TestSysStats(o);
                 TestPainter(o);
+                TestMedia();
                 TestWeatherMap(o);
                 TestEnvironment();
             }
@@ -610,6 +611,94 @@ namespace ClaudeCurtain
                   Math.Abs(a.X - later.X) <= 1 && Math.Abs(a.Y - later.Y) <= 1);
             Check("painter: it rests on the golden section (space above : below = 1 : phi)",
                   Math.Abs((1440 - 800) / (1 + CurtainPainter.Phi) - a.Y) <= 1);
+        }
+
+        /// <summary>
+        /// What is playing: times, app names, the position running on between the app's reports, the layout
+        /// beside the clock on every screen, shortened titles, and a live read of Windows' media controls.
+        /// </summary>
+        private static void TestMedia()
+        {
+            Check("media: times read m:ss, and h:mm:ss from an hour",
+                  MediaInfo.Time(0) == "0:00" && MediaInfo.Time(217.9) == "3:37" && MediaInfo.Time(600) == "10:00" &&
+                  MediaInfo.Time(3725) == "1:02:05" && MediaInfo.Time(-4) == "0:00");
+            Check("media: app names come out readable",
+                  MediaInfo.AppName("Spotify.exe") == "Spotify" && MediaInfo.AppName("SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify") == "Spotify" &&
+                  MediaInfo.AppName("MSEdge") == "Edge" && MediaInfo.AppName("chrome.exe") == "Chrome" && MediaInfo.AppName(null) == "");
+
+            DateTime t0 = new DateTime(2026, 11, 21, 22, 0, 0, DateTimeKind.Utc);
+            MediaInfo playing = new MediaInfo { Title = "A", Artist = "B", Playing = true, Position = 10, Length = 200, PositionAt = t0 };
+            MediaInfo paused = new MediaInfo { Title = "A", Artist = "B", Playing = false, Position = 10, Length = 200, PositionAt = t0 };
+            Check("media: while playing the position runs on from the last report, and stops at the end",
+                  Math.Abs(playing.PositionNow(t0.AddSeconds(5)) - 15) < 0.01 && playing.PositionNow(t0.AddSeconds(1000)) == 200);
+            Check("media: while paused it stays put", Math.Abs(paused.PositionNow(t0.AddSeconds(5)) - 10) < 0.01);
+            MediaInfo later = new MediaInfo { Title = "A", Artist = "B", Playing = true, Position = 90, Length = 200, PositionAt = t0.AddSeconds(80) };
+            Check("media: the position does not change what is composed (it is drawn live); playing or paused does",
+                  playing.Key() == later.Key() && playing.Key() != paused.Key());
+
+            Size[] screens = { new Size(1280, 720), new Size(1920, 1080), new Size(2560, 1440), new Size(3440, 1440), new Size(1080, 1920) };
+            bool fits = true, landscapeShows = true, placed = true, quietWithout = true;
+            string worst = "";
+            foreach (Size scr in screens)
+            {
+                foreach (string state in new[] { "music", "paused", "music-long", "idle" })
+                {
+                    Options po = new Options { LocalDir = Path.Combine(Path.GetTempPath(), "no-such-dir"), TestState = state };
+                    DisplayState s = CurtainPreview.Sample(po);
+                    using (CurtainPainter.Layout l = CurtainPainter.Compose(s, scr.Width, scr.Height))
+                    {
+                        string at = state + " at " + scr.Width + "x" + scr.Height;
+                        if (l == null || l.Block == null || l.Block.Width > scr.Width * CurtainPainter.MaxWidthShare + 1 ||
+                            l.Block.Height > scr.Height * CurtainPainter.MaxHeightShare + 1) { fits = false; worst = at; continue; }
+                        if (state == "idle") { if (l.HasMedia) quietWithout = false; continue; }
+                        if (l.Landscape && !l.HasMedia) { landscapeShows = false; worst = at; }
+                        if (!l.HasMedia) continue;
+                        // beside the clock, inside the left column, the line on the date's baseline
+                        if (l.BarLeft < l.MediaLeft || l.BarRight > l.LeftCol.Right + 0.5f || l.BarY > l.MediaBaseline ||
+                            l.MediaLength != 217)
+                        {
+                            placed = false;
+                            worst = at + ": bar " + l.BarLeft + ".." + l.BarRight + ", room from " + l.MediaLeft;
+                        }
+                        // ink in the media's corner of the block: there is some, and none left of where it may start
+                        // (that is the clock's reserved width)
+                        int x0 = (int)Math.Round(l.OriginX + l.MediaLeft), x1 = (int)Math.Round(l.OriginX + l.LeftCol.Right);
+                        int y1 = (int)Math.Round(l.OriginY + l.MediaBaseline - l.Unit * 0.5f);
+                        bool ink = false;
+                        for (int y = 0; y < y1 && !ink; y += 2)
+                            for (int x = x0; x < x1 && !ink; x += 2)
+                                ink = l.Block.GetPixel(x, y).G > 40;
+                        if (!ink) { placed = false; worst = at + ": no ink beside the clock"; }
+                    }
+                }
+            }
+            Check("media: with a track the composition still fits every screen" + (fits ? "" : " (" + worst + ")"), fits);
+            Check("media: on every landscape screen it shows beside the clock" + (landscapeShows ? "" : " (" + worst + ")"), landscapeShows);
+            Check("media: it sits right of the clock's room, inside the left column, its line on the date's baseline" +
+                  (placed ? "" : " (" + worst + ")"), placed);
+            Check("media: with nothing playing nothing is shown", quietWithout);
+
+            using (Bitmap probe = new Bitmap(1, 1))
+            using (Graphics m = Graphics.FromImage(probe))
+            using (Font f = new Font("Segoe UI", 20f, GraphicsUnit.Pixel))
+            {
+                float w = CurtainPainter.Measure(m, "Night Swim", f, 0) + 4;
+                string a = CurtainPainter.Shorten(m, "Night Swim (feat. Somebody)", f, 0, w);
+                string b = CurtainPainter.Shorten(m, "Wish You Were Here - Remastered 2011", f, 0, CurtainPainter.Measure(m, "Wish You Were Here", f, 0) + 4);
+                string c = CurtainPainter.Shorten(m, "Supercalifragilisticexpialidocious", f, 0, w);
+                string d = CurtainPainter.Shorten(m, "Short", f, 0, w);
+                Check("media: a long title drops its extras first ('" + a + "', '" + b + "'), then ends in an ellipsis ('" + c + "')",
+                      a == "Night Swim" && b == "Wish You Were Here" && c.EndsWith("\u2026") && CurtainPainter.Measure(m, c, f, 0) <= w && d == "Short");
+            }
+
+            // Windows' media controls answer (whatever is or is not playing), within a few seconds.
+            Stopwatch sw = Stopwatch.StartNew();
+            string error;
+            MediaInfo now = NowPlaying.ReadOnce(out error);
+            sw.Stop();
+            Check("media: Windows' media controls answer in " + sw.ElapsedMilliseconds + " ms (" +
+                  (error ?? (now == null ? "nothing playing" : (now.Playing ? "a track playing" : "a track paused") + " in " + now.App)) + ")",
+                  error == null && sw.ElapsedMilliseconds < 5000);
         }
 
         /// <summary>

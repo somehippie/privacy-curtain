@@ -54,6 +54,7 @@ namespace ClaudeCurtain
         public int TestKeysAfter;
         public int TestSecureAt;      // seconds; simulate the security screen opening at this time
         public int TestSecureOnMs;    // how long the simulated security screen stays open
+        public string TestElevatedTitle;  // treat a foreground window with exactly this title as elevated
         public string TestScreen;     // "WxH": lay the summary window out as if the primary monitor were this size
         public string PreviewFile;    // --render-preview: paint the curtain into this PNG instead of showing it
         public string TestState;      // preview only: idle, typing, wrong, cooldown, admin, bright, night; radar or clouds (the map's mode)
@@ -124,6 +125,7 @@ namespace ClaudeCurtain
                         case "--test-keys": SplitAt(Next(args, ref i), out o.TestKeys, out o.TestKeysAfter); break;
                         case "--test-secure": { string ms; SplitAt(Next(args, ref i), out ms, out o.TestSecureAt); o.TestSecureOnMs = int.Parse(ms, CultureInfo.InvariantCulture); break; }
                         case "--test-screen": o.TestScreen = Next(args, ref i); break;
+                        case "--test-elevated-title": o.TestElevatedTitle = Next(args, ref i); break;
                         case "--render-preview": o.Mode = Mode.Preview; o.PreviewFile = Next(args, ref i); break;
                         case "--test-state": o.TestState = Next(args, ref i); break;
                         case "--preview-seconds": o.PreviewSeconds = int.Parse(Next(args, ref i), CultureInfo.InvariantCulture); break;

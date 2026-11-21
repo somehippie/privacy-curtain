@@ -201,6 +201,7 @@ namespace ClaudeCurtain
             g.PixelOffsetMode = PixelOffsetMode.HighQuality;
             g.TextRenderingHint = TextRenderingHint.AntiAliasGridFit;
             DrawMap(g, l, s, ox, oy, now, fadeIn);
+            DrawMedia(g, l, s, ox, oy, fadeIn);
 
             double breath = 0.62 + 0.38 * (0.5 - 0.5 * Math.Cos(2 * Math.PI * (now / 1000.0) / BreathSeconds));
             using (SolidBrush b = new SolidBrush(Fade(Accent, (float)breath * fadeIn)))
@@ -255,6 +256,27 @@ namespace ClaudeCurtain
                 float a = Clamp01((now - stateSince) / (float)SwapMs) * fadeIn;
                 DrawLiveText(g, HintText, label, Fade(Tertiary, a), ox + l.PinX, oy + l.PinHintBaseline, l.Track);
             }
+        }
+
+        /// <summary>The track's progress: the elapsed time, then the line filled that far. Redrawn every tick.</summary>
+        private static void DrawMedia(Graphics g, Layout l, DisplayState s, float ox, float oy, float fadeIn)
+        {
+            if (!l.HasMedia || l.MediaLength <= 0 || s.Media == null) return;
+            double pos = s.Media.PositionNow(DateTime.UtcNow);
+            float share = (float)Math.Max(0, Math.Min(1, pos / l.MediaLength));
+            float x0 = ox + l.BarLeft, x1 = ox + l.BarRight, y = oy + l.BarY, h = l.BarH;
+            using (SolidBrush b = new SolidBrush(Fade(Track, fadeIn))) g.FillRectangle(b, x0, y, x1 - x0, h);
+            float xf = x0 + (x1 - x0) * share;
+            using (SolidBrush b = new SolidBrush(Fade(l.MediaPlaying ? Secondary : Tertiary, fadeIn))) g.FillRectangle(b, x0, y, xf - x0, h);
+            if (l.MediaPlaying)
+            {
+                float d = h * 2.6f;
+                using (SolidBrush b = new SolidBrush(Fade(Hero, fadeIn))) g.FillEllipse(b, xf - d / 2f, y + h / 2f - d / 2f, d, d);
+            }
+            string elapsed = MediaInfo.Time(pos);
+            float w = Measure(g, elapsed, l.Label.Font, l.Track);
+            DrawLiveText(g, elapsed, l.Label, Fade(l.MediaPlaying ? Secondary : Tertiary, fadeIn),
+                         x0 - l.MediaGap - w, oy + l.MediaBaseline, l.Track);
         }
 
         private static void DrawLiveText(Graphics g, string text, Face f, Color c, float x, float baseline, float tracking)
@@ -323,6 +345,11 @@ namespace ClaudeCurtain
             public Face Data;
             public List<PlacedStation> MapStations = new List<PlacedStation>();
             public TideChart MapTide;             // the tide inset (null = none)
+            public bool HasMedia;                 // what is playing, beside the clock (see AddMedia)
+            public float MediaLeft, MediaBaseline, BarLeft, BarRight, BarY, BarH, MediaGap;
+            public string MediaTitle = "";
+            public bool MediaPlaying;
+            public double MediaLength;            // seconds; 0 = no progress line
             public readonly List<KeyValuePair<string, float>> Baselines = new List<KeyValuePair<string, float>>();
             private readonly List<Face> faces = new List<Face>();
 
@@ -492,6 +519,7 @@ namespace ClaudeCurtain
                     foreach (string suffix in twelve ? new[] { " AM", " PM" } : new[] { "" })
                         leftW = Math.Max(leftW, AddClock(new List<Op>(), m, widest + suffix, fClock, fSuffix, time, track, y, st(6 + ClockStep), L));
                     L.ClockText = clockText;
+                    float clockRight = leftW, clockBase = y;
 
                     string date = (s.Date ?? "").ToUpperInvariant();
                     string zone = (s.Zone ?? "").Replace(",", "").ToUpperInvariant();
@@ -603,6 +631,13 @@ namespace ClaudeCurtain
                         L.MapRuleY = mapRule;
                         AddMap(ops, m, s, L, fLabel, track, unit);
                     }
+                    if (s.Media != null)
+                    {
+                        Face fSong = L.Own(MakeFace(famSemi, st(5)));
+                        AddMedia(ops, m, s.Media, L, clockRight + st(3), hasMap ? L.Map.Right : leftW, clockBase, yDate,
+                                 fSong, fSmall, fLabel, track, c, st);
+                    }
+
                     y = ruleTop + ruleH + st(4) + fTitle.CapHeight;
                     L.Baselines.Add(new KeyValuePair<string, float>("C / \u03C6\u2075", y));
                     AddText(ops, m, title, fTitle, Primary, -InkLeft(title, fTitle), y, 0);
@@ -1524,6 +1559,106 @@ namespace ClaudeCurtain
         }
 
         // ================================================================== ops and rendering
+
+        /// <summary>
+        /// What is playing, in the room right of the clock, set flush right with the map so it mirrors the clock
+        /// at the left edge. The artist sits on the clock's baseline and the progress line on the date's, so the
+        /// two blocks share their lines; the app's name and the title stack above. Long names end in an
+        /// ellipsis. Where the room is too narrow (a portrait screen, say) nothing is shown.
+        /// </summary>
+        private static void AddMedia(List<Op> ops, Graphics m, MediaInfo media, Layout L, float left, float right,
+                                     float clockBase, float dateBase, Face fSong, Face fArtist, Face fLabel, float track,
+                                     float c, Func<double, float> st)
+        {
+            float room = (float)Math.Floor(right - left);
+            if (room < c * 0.6f) return;
+
+            // the progress row, on the date's baseline: elapsed (drawn live), the line, the length
+            if (media.Length > 0)
+            {
+                string length = MediaInfo.Time(media.Length);
+                float lengthW = Measure(m, length, fLabel.Font, track);
+                float gap = (float)Math.Round(st(6));
+                string widest = Regex.Replace(length, "[0-9]", WidestDigit(m, fLabel.Font, "0123456789"));
+                float elapsedW = Measure(m, widest, fLabel.Font, track);
+                float barW = (float)Math.Round(Math.Min(c / Phi, room - lengthW - elapsedW - 2 * gap));
+                if (barW >= c * 0.25f)
+                {
+                    AddTextOp(ops, length, fLabel, Tertiary, right - lengthW, dateBase, track);
+                    L.BarRight = (float)Math.Round(right - lengthW - gap);
+                    L.BarLeft = L.BarRight - barW;
+                    L.BarH = Math.Max(2f, (float)Math.Round(L.Unit / 55f));
+                    L.BarY = (float)Math.Round(dateBase - fLabel.CapHeight / 2f - L.BarH / 2f);
+                    L.MediaGap = gap;
+                    L.MediaLength = media.Length;
+                }
+            }
+
+            // the artist (and the album, when there is room) on the clock's baseline
+            string artist = media.Artist ?? "", album = media.Album ?? "", dot = "   \u00B7   ";
+            if (album.Length > 0 && !string.Equals(album, media.Title, StringComparison.OrdinalIgnoreCase) &&
+                Measure(m, artist + dot + album, fArtist.Font, 0) <= room)
+            {
+                float albumW = Measure(m, album, fArtist.Font, 0), dotW = Measure(m, dot, fArtist.Font, 0);
+                float artistW = Measure(m, artist, fArtist.Font, 0);
+                AddTextOp(ops, album, fArtist, Tertiary, right - albumW, clockBase, 0);
+                AddTextOp(ops, dot, fArtist, Tertiary, right - albumW - dotW, clockBase, 0);
+                AddTextOp(ops, artist, fArtist, Secondary, right - albumW - dotW - artistW, clockBase, 0);
+            }
+            else if (artist.Length > 0)
+            {
+                artist = Fit(m, artist, fArtist.Font, 0, room);
+                AddTextOp(ops, artist, fArtist, Secondary, right - Measure(m, artist, fArtist.Font, 0), clockBase, 0);
+            }
+
+            // the title above it, and the app above that
+            float titleBase = (float)Math.Round(clockBase - fArtist.CapHeight - st(5.5));
+            string title = Shorten(m, media.Title ?? "", fSong.Font, 0, room);
+            AddTextOp(ops, title, fSong, Primary, right - Measure(m, title, fSong.Font, 0), titleBase, 0);
+            float labelBase = (float)Math.Round(titleBase - fSong.CapHeight - st(5));
+            string app = (media.App ?? "").ToUpperInvariant();
+            string label = (media.Playing ? "NOW PLAYING" : "PAUSED") + (app.Length > 0 ? "   \u00B7   " + app : "");
+            label = Fit(m, label, fLabel.Font, track, room);
+            AddTextOp(ops, label, fLabel, Tertiary, right - Measure(m, label, fLabel.Font, track), labelBase, track);
+
+            L.HasMedia = true;
+            L.MediaLeft = left;
+            L.MediaTitle = title;
+            L.MediaBaseline = dateBase;
+            L.MediaPlaying = media.Playing;
+        }
+
+        private static readonly Regex TitleExtra = new Regex(@"\s*(\([^()]*\)|\[[^\[\]]*\]|\s[-\u2013\u2014]\s[^-\u2013\u2014]*)$");
+
+        /// <summary>
+        /// A title that fits maxW: first without its trailing extras, "(feat. ...)", "[Live]" or "- Remastered
+        /// 2011", one at a time from the end, then with an ellipsis.
+        /// </summary>
+        internal static string Shorten(Graphics m, string text, Font f, float tracking, float maxW)
+        {
+            string t = text ?? "";
+            while (Measure(m, t, f, tracking) > maxW)
+            {
+                string cut = TitleExtra.Replace(t, "");
+                if (cut == t || cut.Trim().Length == 0) break;
+                t = cut;
+            }
+            return Fit(m, t, f, tracking, maxW);
+        }
+
+        /// <summary>The text, shortened with an ellipsis until it fits maxW.</summary>
+        internal static string Fit(Graphics m, string text, Font f, float tracking, float maxW)
+        {
+            if (string.IsNullOrEmpty(text) || Measure(m, text, f, tracking) <= maxW) return text ?? "";
+            int lo = 0, hi = text.Length - 1;
+            while (hi > lo)
+            {
+                int mid = (lo + hi + 1) / 2;
+                if (Measure(m, text.Substring(0, mid).TrimEnd() + "\u2026", f, tracking) <= maxW) lo = mid; else hi = mid - 1;
+            }
+            if (lo > 0 && char.IsHighSurrogate(text[lo - 1])) lo--;
+            return text.Substring(0, lo).TrimEnd() + "\u2026";
+        }
 
         private static float AddText(List<Op> ops, Graphics m, string text, Face f, Color color, float x, float baseline, float tracking)
         {

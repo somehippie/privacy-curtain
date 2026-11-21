@@ -196,6 +196,19 @@ namespace ClaudeCurtain
             }
             s.Weather = lines;
 
+            if (real != null && !o.PreviewHideHome) s.Media = NowPlaying.ReadOnce();
+            string st = (state ?? "idle").ToLowerInvariant();
+            if (st == "music" || st == "paused" || st == "music-long")
+            {
+                s.Media = new MediaInfo
+                {
+                    App = "Spotify", Playing = st != "paused", Position = 83, Length = 217, PositionAt = DateTime.UtcNow,
+                    Title = st == "music-long" ? "An Extremely Long Song Title That Goes On (Extended Remix, Remastered 2026)" : "Harbour Lights",
+                    Artist = st == "music-long" ? "The Very Long Band Name Orchestra and Friends" : "Sample Artist",
+                    Album = "Low Tide",
+                };
+            }
+
             switch ((state ?? "idle").ToLowerInvariant())
             {
                 case "typing": s.PinState = PinGate.StateTyping; s.Digits = 4; break;

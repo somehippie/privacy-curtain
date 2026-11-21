@@ -8,7 +8,7 @@
     selftest smoke off kill watchdog-lost session-end close pin summary-layout second-instance no-pin launcher freeze two-minute
 
   Desktop stages need the PC unlocked, because they take screenshots and send clicks and keys:
-    capture inject pin-injected setpin
+    capture inject pin-injected admin-focus setpin
 
   What no script can test is real fingers on the real keyboard. That is the checklist in the README.
 
@@ -36,7 +36,7 @@ $ErrorActionPreference = 'Stop'
 
 $lifecycle = @('selftest', 'smoke', 'off', 'kill', 'watchdog-lost', 'session-end', 'close', 'pin', 'summary-layout',
                'second-instance', 'no-pin', 'launcher', 'freeze', 'keep-awake', 'events', 'alerts', 'two-minute')
-$desktopStages = @('capture', 'inject', 'pin-injected', 'setpin')
+$desktopStages = @('capture', 'inject', 'pin-injected', 'admin-focus', 'setpin')
 if (-not $Stage) { if ($Desktop) { $Stage = $desktopStages } else { $Stage = $lifecycle } }
 
 $on = Join-Path $PSScriptRoot 'curtain-on.ps1'
@@ -856,6 +856,108 @@ function Invoke-PinInjected {
     }
 }
 
+function Start-Ghost([int]$Seconds, [int]$X, [int]$Y) {
+    $status = Join-Path $testLocal 'ghost.json'
+    Remove-Item $status, "$status.stop", "$status.arm" -Force -ErrorAction SilentlyContinue
+    Start-Process -FilePath $helper -ArgumentList @('ghost', "`"$status`"", "$Seconds", "$X", "$Y") -WindowStyle Hidden | Out-Null
+    if (-not (Get-Json $status)) { throw 'the ghost window did not appear' }
+    $status
+}
+
+function Get-NewLog([string]$File, [long]$From) {
+    # The curtain.log lines written since $From (a byte offset).
+    $fs = [IO.File]::Open($File, 'Open', 'Read', 'ReadWrite')
+    try {
+        [void]$fs.Seek($From, 'Begin')
+        (New-Object IO.StreamReader($fs)).ReadToEnd()
+    } finally { $fs.Dispose() }
+}
+
+function Wait-Until([scriptblock]$Condition, [double]$TimeoutSeconds) {
+    $sw = [Diagnostics.Stopwatch]::StartNew()
+    while ($sw.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
+        if (& $Condition) { return $sw.Elapsed.TotalSeconds }
+        Start-Sleep -Milliseconds 100
+    }
+    return -1
+}
+
+function Invoke-AdminFocus {
+    # An administrator window cannot be opened without a prompt, so --test-elevated-title makes the curtain
+    # treat one test window as elevated. Everything else (focus, hotkeys, the PIN) is the real thing.
+    $s = 'admin-focus'
+    $log = Join-Path $testLocal 'curtain.log'
+    $wrong = '00000000'
+    if ($script:TestPin -eq $wrong) { $wrong = '11111111' }
+    $status = Start-Harness 120
+    $ghost = $null
+    try {
+        # 1. A window nobody can see takes focus: the curtain hands focus back to the window that had it.
+        $state = Start-TestCurtain 60 @('--test-elevated-title', '"Curtain test ghost"')
+        if (-not $state) { Add-Result $s 'curtain starts' $false; return }
+        Start-Sleep -Milliseconds 1500
+        $h = Get-Json $status
+        & $helper click $h.boxX $h.boxY | Out-Null
+        Start-Sleep -Milliseconds 600
+        $h = Get-Json $status
+        if (-not ($h.foreground -and $h.focused)) { Add-Result $s 'test window has focus (keys must land somewhere harmless)' $false; return }
+
+        $mark = (Get-Item $log).Length
+        $ghost = Start-Ghost 60 760 160
+        $g = Get-Json $ghost
+        & $helper click $h.boxX $h.boxY | Out-Null       # the ghost may have taken focus as it opened: take it back
+        Start-Sleep -Milliseconds 400
+        Set-Content -Path "$ghost.arm" -Value 'arm' -Encoding ascii
+        & $helper click $g.x $g.y | Out-Null
+        $back = Wait-Until { $gg = Read-CurtainJson $ghost; $hh = Read-CurtainJson $status; $gg -and $gg.hidden -and $hh -and $hh.foreground } 8
+        $g = Get-Json $ghost
+        Add-Result $s 'the ghost window took focus and hid itself (1 x 1 px, off screen) still holding it' ($g.activated -and $g.hiddenWithFocus) "activated=$($g.activated) hiddenWithFocus=$($g.hiddenWithFocus)"
+        Add-Result $s 'the curtain gives focus back to the window that had it' ($back -ge 0) ("{0:n1} s" -f $back)
+        Start-Sleep -Milliseconds 800
+        $new = Get-NewLog $log $mark
+        Add-Result $s 'the log says the hidden elevated window had focus, and describes it' ($new -match 'an elevated window has focus \(pid \d+, integrity 0x[0-9A-F]+, CurtainTestHelper, class ')
+        Add-Result $s 'the log says the curtain took focus back' ($new -match 'took focus back from a hidden elevated window \(.+\) .*and gave it to CurtainTestHelper')
+        Add-Result $s 'the log says the fallback went off with no keys through it' ($new -match 'PIN hotkey fallback off \(no keys arrived through it\)')
+        Add-Result $s 'the curtain is still up' ([bool](Get-Process -Id $state.pid -ErrorAction SilentlyContinue))
+        Set-Content -Path "$ghost.stop" -Value 'stop' -Encoding ascii
+        Stop-AnyCurtain
+
+        # 2. A window you can see keeps focus, and the PIN arrives through the hotkey fallback.
+        $mark = (Get-Item $log).Length
+        $state = Start-TestCurtain 60 @('--test-elevated-title', '"Curtain test target"')
+        if (-not $state) { Add-Result $s 'curtain starts again' $false; return }
+        Start-Sleep -Milliseconds 1500
+        $h = Get-Json $status
+        & $helper click $h.boxX $h.boxY | Out-Null
+        Start-Sleep -Milliseconds 2600     # past a reclaim attempt, if one (wrongly) came
+        $h = Get-Json $status
+        $new = Get-NewLog $log $mark
+        Add-Result $s 'a visible elevated window turns the hotkey fallback on' ($new -match 'PIN hotkey fallback on \(23 keys\)')
+        Add-Result $s 'a visible elevated window keeps focus (the curtain does not take it)' ($h.foreground -and $new -notmatch 'took focus back')
+
+        & $helper keys (Get-KeyScript $wrong) | Out-Null
+        Start-Sleep -Milliseconds 1200
+        $h = Get-Json $status
+        Add-Result $s 'a wrong PIN through the hotkeys does not close the curtain' ([bool](Get-Process -Id $state.pid -ErrorAction SilentlyContinue))
+        Add-Result $s 'the hotkeys keep the digits from the window in front' ($h.text -notmatch '\d') "text='$($h.text)'"
+        $new = Get-NewLog $log $mark
+        Add-Result $s 'the log says a key arrived through the fallback' ($new -match 'hotkey fallback: the first key arrived')
+        Start-Sleep -Milliseconds 2600
+        & $helper keys (Get-KeyScript $script:TestPin) | Out-Null
+        $gone = Wait-PidGone $state.pid 6
+        Add-Result $s 'the right PIN through the hotkeys closes the curtain' ($gone -ge 0) ("{0:n1} s" -f $gone)
+        Test-ExitReason $s 'pin'
+        $new = Get-NewLog $log $mark
+        Add-Result $s 'the log says the PIN came in through the fallback' ($new -match 'the PIN came in through the hotkey fallback')
+        Add-Result $s 'the log never contains the PIN' ($new -notmatch [regex]::Escape($script:TestPin))
+    } finally {
+        if ($ghost) { Set-Content -Path "$ghost.stop" -Value 'stop' -Encoding ascii -ErrorAction SilentlyContinue }
+        Stop-Harness $status
+        Stop-AnyCurtain
+        if ($ghost) { Start-Sleep -Milliseconds 300; Remove-Item $ghost, "$ghost.stop", "$ghost.arm" -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 function Invoke-SetPin {
     $s = 'setpin'
     Stop-AnyCurtain
@@ -933,6 +1035,7 @@ try {
                 'capture'         { Invoke-Capture }
                 'inject'          { Invoke-Inject }
                 'pin-injected'    { Invoke-PinInjected }
+                'admin-focus'     { Invoke-AdminFocus }
                 'setpin'          { Invoke-SetPin }
                 default           { Add-Result $name 'known stage name' $false }
             }

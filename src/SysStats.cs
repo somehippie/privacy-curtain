@@ -77,6 +77,11 @@ namespace ClaudeCurtain
             systemDrive = string.IsNullOrEmpty(root) ? "C:\\" : root;
         }
 
+        // What a media app is playing (see NowPlaying): read on a thread of its own once StartMedia is called.
+        private readonly NowPlaying media = new NowPlaying();
+        public void StartMedia() { media.Start(); }
+        public MediaInfo Media { get { return media.Current; } }
+
         public string StatsLine { get { return statsLine; } }
         public string SysLine { get { return sysLine; } }
 
