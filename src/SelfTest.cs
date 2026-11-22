@@ -969,6 +969,81 @@ namespace ClaudeCurtain
                       MapArt.MarshDash(0, 2) && !MapArt.MarshDash(0, 3) && !MapArt.MarshDash(4, 2) && MapArt.MarshDash(4, 6) && !MapArt.MarshDash(0, 6));
             }
 
+            // The close-up (2026-11-21): its own lines in map.txt, streets and roads from their own channels, its
+            // view, the big map's pictures played over its own ground, and its place under the map.
+            {
+                WeatherMap.Index cx = WeatherMap.Index.Parse(new[]
+                {
+                    "box 44.4 -123.5 45.6 -120.5", "base b.png", "detail box 44.85 -122.3 45.15 -121.7", "detail base db.png", "detail roads r.png",
+                    "detail dem 12 100 200 107 205", "detail detail base x.png", "detail water ..\\w.png",
+                });
+                Check("close-up: map.txt's detail lines go to the close-up's own index (box, ground, streets, zoom-12 elevation); a nested one and a path are refused",
+                      cx.Base == "b.png" && cx.Roads == null && cx.Detail != null && cx.Detail.HasBox && Math.Abs(cx.Detail.Box.South - 44.85) < 1e-9 &&
+                      cx.Detail.Base == "db.png" && cx.Detail.Roads == "r.png" && cx.Detail.DemZoom == 12 && cx.Detail.Water == null && cx.Detail.Detail == null);
+                byte[] streets = WeatherMap.ChannelMask(new[] { unchecked((int)0xFF00FF00), unchecked((int)0x80FF0000), unchecked((int)0xFFAA0000) }, 8);
+                byte[] roads = WeatherMap.ChannelMask(new[] { unchecked((int)0xFF00FF00), unchecked((int)0x80FF0000), unchecked((int)0xFFAA0000) }, 16);
+                Check("close-up: streets (green) and the bigger roads (red, by size) read from their own channels",
+                      streets[0] == 255 && streets[1] == 0 && streets[2] == 0 && roads[0] == 0 && roads[1] == 128 && roads[2] == 170);
+
+                GeoBox db = new GeoBox(44.85, -122.45, 45.15, -121.75);   // as the weather script cuts it: more of it west
+                GeoBox dc = WeatherMap.DetailCrop(db, 45.0, -122.0, 560, 190);
+                double across = (-122.0 - dc.West) / (dc.East - dc.West), down = (dc.North - 45.0) / (dc.North - dc.South);
+                GeoBox edge = WeatherMap.DetailCrop(db, 45.14, -121.76, 560, 190);
+                Check("close-up: 11.5 km tall at the screen's shape, home 7/10 of the way across (the town to the west) and halfway down; inside its box near the edge",
+                      Math.Abs(dc.KmTall - WeatherMap.DetailViewKm) < 0.01 && Math.Abs(dc.KmWide / dc.KmTall - 560 / 190.0) < 0.01 &&
+                      Math.Abs(across - WeatherMap.DetailWestShare) < 1e-6 && Math.Abs(down - 0.5) < 1e-6 &&
+                      edge.North <= db.North + 1e-9 && edge.East <= db.East + 1e-9 && edge.South >= db.South - 1e-9 && edge.West >= db.West - 1e-9);
+
+                // Rain in two cells of the big map's picture, where the close-up's own box would put no rain: it
+                // shows in the middle of the close-up only if the picture is placed by the big map's box.
+                MapFrame f = new MapFrame { Utc = new DateTime(2026, 11, 21, 12, 0, 0, DateTimeKind.Utc), Kind = "radar", W = 20, H = 20, Values = new byte[400] };
+                for (int y = 6; y <= 7; y++) for (int x = 12; x <= 13; x++) f.Values[y * 20 + x] = 45;
+                WeatherMap close = new WeatherMap
+                {
+                    Box = new GeoBox(45.1, -122.9, 45.5, -122.5), FrameBox = new GeoBox(44, -124, 46, -122), BaseW = 2, BaseH = 2,
+                    Water = new byte[4], BaseId = "selftest-close-up", Radar = new[] { f },
+                };
+                using (Bitmap pic = (Bitmap)MapArt.Frame(close, close.Box, 200, 100, f, true).Clone())
+                {
+                    Check("close-up: it plays the big map's pictures, placed by the big map's box, softened where blown up",
+                          pic.GetPixel(100, 50).A > 200 && pic.GetPixel(1, 1).A == 0 && pic.GetPixel(198, 98).A == 0);
+                }
+
+                Options co = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") };
+                DisplayState cs = CurtainPreview.Sample(co, "radar");
+                WeatherMap sd = cs.Map != null ? cs.Map.Detail : null;
+                bool sampleOk = sd != null && sd.Elevation != null && Array.Exists(sd.Streets, v => v > 0) && Array.Exists(sd.Roads, v => v > 0) &&
+                                Array.Exists(sd.Water, v => v == 255) && Array.Exists(sd.Water, v => v == 0) && sd.Radar == cs.Map.Radar;
+                Check("close-up: the sample has one (river, streets, roads, hills), playing the sample map's own pictures", sampleOk);
+                foreach (string screen in new[] { "2560x1440", "1920x1080" })
+                {
+                    string[] wh = screen.Split('x');
+                    using (Bitmap probe = new Bitmap(1, 1))
+                    using (Graphics g = Graphics.FromImage(probe))
+                    using (CurtainPainter.Layout l = CurtainPainter.Compose(cs, int.Parse(wh[0]), int.Parse(wh[1])))
+                    {
+                        float msg = CurtainPainter.Measure(g, "Any attempt to use, unlock or interrupt this PC is logged.", l.Small.Font, 0);
+                        RectangleF d = l.Detail;
+                        Check("close-up: at " + screen + " it sits under the map, flush with its right edge, clear of the message, its foot on the message's last line (" +
+                              d.X.ToString("0") + "," + d.Y.ToString("0") + " " + d.Width.ToString("0") + "x" + d.Height.ToString("0") + ")",
+                              d.Width > 0 && Math.Abs(d.Right - l.Map.Right) < 0.6f && d.Top > l.Map.Bottom + 4 && d.Left > msg + 4 &&
+                              d.Bottom <= l.LeftCol.Bottom && d.Width / d.Height > 2 && !float.IsNaN(l.DetailHome.X));
+                    }
+                }
+                using (CurtainPainter.Layout l = CurtainPainter.Compose(cs, 1080, 1920))
+                    Check("close-up: a portrait screen leaves it out (no room beside the message)", l.Detail.Width == 0);
+                using (Bitmap probe = new Bitmap(1, 1))
+                using (Graphics g = Graphics.FromImage(probe))
+                using (Font font = new Font("Segoe UI", 12f, GraphicsUnit.Pixel))
+                {
+                    string full = "NOAA  ·  USGS  ·  CENSUS  ·  © OPENSTREETMAP";
+                    string narrow = CurtainPainter.FitCredit(g, full, font, 1, CurtainPainter.Measure(g, "NOAA  ·  USGS  ·  © OPENSTREETMAP", font, 1) + 1);
+                    string tiny = CurtainPainter.FitCredit(g, full, font, 1, 5);
+                    Check("map: a credit too long for its room drops the public-domain sources from the end, never OpenStreetMap's (" + narrow + " | " + tiny + ")",
+                          CurtainPainter.FitCredit(g, full, font, 1, 9999) == full && narrow == "NOAA  ·  USGS  ·  © OPENSTREETMAP" && tiny == "© OPENSTREETMAP");
+                }
+            }
+
             // Warnings and earthquakes: read from map.txt (an ended alert dropped, an old quake too), placed in the
             // corner the tide leaves, warnings first, a strong quake off the map with how far and which way.
             {

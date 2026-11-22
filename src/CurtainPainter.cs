@@ -346,6 +346,10 @@ namespace ClaudeCurtain
             public List<PlacedStation> MapStations = new List<PlacedStation>();
             public TideChart MapTide;             // the tide inset (null = none)
             public AlertPanel MapAlerts;          // the warnings and earthquakes inset (null = none)
+            public RectangleF Detail;             // the close-up under the map (empty = none)
+            public GeoBox DetailCrop;
+            public PointF DetailHome = new PointF(float.NaN, float.NaN);   // in close-up pixels
+            public string DetailOverlayKey = "";
             public bool HasMedia;                 // what is playing, beside the clock (see AddMedia)
             public float MediaLeft, MediaBaseline, BarLeft, BarRight, BarY, BarH, MediaGap;
             public string MediaTitle = "";
@@ -649,6 +653,21 @@ namespace ClaudeCurtain
                         L.MapHeadBaseline = mapHead;
                         L.MapRuleY = mapRule;
                         AddMap(ops, m, s, L, fLabel, track, unit);
+
+                        // The close-up (2026-11-21): in the room the message leaves beside it under the map, from
+                        // a step below the map to the message's last line, as far right as the map.
+                        if (landscape && L.HasRight && s.Map.Detail != null)
+                        {
+                            float msgRight = Math.Max(Measure(m, title, fTitle.Font, 0) - InkLeft(title, fTitle),
+                                                      Math.Max(Measure(m, l1, fSmall.Font, 0), Measure(m, l2, fSmall.Font, 0)));
+                            float dx = (float)Math.Round(msgRight + st(4)), dy = (float)Math.Round(mapBottom + st(5));
+                            RectangleF d = new RectangleF(dx, dy, L.Map.Right - dx, (float)Math.Round(lastLine) - dy);
+                            if (d.Width >= unit * 2 && d.Height >= unit * 0.9f)
+                            {
+                                L.Detail = d;
+                                AddDetail(ops, s, L);
+                            }
+                        }
                     }
                     if (s.Media != null)
                     {
@@ -807,6 +826,29 @@ namespace ClaudeCurtain
                               L.MapHome.X.ToString("0.0", CultureInfo.InvariantCulture) + "," + L.MapHome.Y.ToString("0.0", CultureInfo.InvariantCulture) + "|" +
                               fLabel.Font.Size.ToString("0.00", CultureInfo.InvariantCulture) + "|" + unit.ToString("0.00", CultureInfo.InvariantCulture) + "|" +
                               labels + "|" + tideKey + "|" + alertKey;
+        }
+
+        /// <summary>
+        /// The close-up's still part: its ground, in the block. It shows the town around home (home 7/10 of the
+        /// way across, the larger part of the view west), and plays the map's own weather pictures live (see
+        /// DrawMap), so the two are always at the same moment. No label, alerts, stations or legend (the user:
+        /// they know the place): the ground, the weather and home.
+        /// </summary>
+        private static void AddDetail(List<Op> ops, DisplayState s, Layout L)
+        {
+            WeatherMap d = s.Map.Detail;
+            int w = (int)Math.Round(L.Detail.Width), h = (int)Math.Round(L.Detail.Height);
+            GeoBox crop = WeatherMap.DetailCrop(d.Box, s.Lat, s.Lon, w, h);
+            L.DetailCrop = crop;
+            ops.Add(new Op { Kind = 9, X = L.Detail.X, Y = L.Detail.Y, Picture = () => MapArt.Base(d, crop, w, h) });
+            if (!s.HideHome && !double.IsNaN(s.Lat) && !double.IsNaN(s.Lon))
+            {
+                float hx = (float)((s.Lon - crop.West) / (crop.East - crop.West) * w);
+                float hy = (float)((crop.North - s.Lat) / (crop.North - crop.South) * h);
+                if (hx >= 0 && hx <= w && hy >= 0 && hy <= h) L.DetailHome = new PointF(hx, hy);
+            }
+            L.DetailOverlayKey = L.DetailHome.X.ToString("0.0", CultureInfo.InvariantCulture) + "," +
+                                 L.DetailHome.Y.ToString("0.0", CultureInfo.InvariantCulture) + "|" + L.Unit.ToString("0.00", CultureInfo.InvariantCulture);
         }
 
         /// <summary>
@@ -1071,6 +1113,7 @@ namespace ClaudeCurtain
                 DrawPicture(g, a, mx, my, dim * (1 - t));
                 if (b != null) DrawPicture(g, b, mx, my, dim * t);
                 if (t > 0 && t < 1 && show > 0.004f) mapFading = true;   // a fade the PIN's veil hides needs no frames
+                DrawDetailFrames(g, l, ox, oy, fr, i, j, b != null ? t : 0, dim);
 
                 MapFrame shown = t < 0.5f ? fr[i] : fr[j];
                 string when = shown.Utc.ToLocalTime().ToString("t", CultureInfo.CurrentCulture).ToUpperInvariant();
@@ -1087,7 +1130,76 @@ namespace ClaudeCurtain
             DrawPicture(g, MapArt.Shore(map, l.MapCrop, mw, mh), mx, my, show);
             Bitmap overlay = MapArt.Overlay(map, l.MapCrop, mw, mh, l.MapOverlayKey, og => DrawMapOverlay(og, l, mw, mh));
             DrawPicture(g, overlay, mx, my, show);
-            if (fr.Length > 0) MapArt.WarmOne(map, l.MapCrop, mw, mh, fr);   // at most one picture a frame, so a replay never waits
+            if (l.Detail.Width > 0 && map.Detail != null)
+            {
+                // the close-up steps back with the map while a PIN is typed, so the page dims as one
+                WeatherMap d = map.Detail;
+                int dx = (int)Math.Round(ox + l.Detail.X), dy = (int)Math.Round(oy + l.Detail.Y);
+                int dw = (int)Math.Round(l.Detail.Width), dh = (int)Math.Round(l.Detail.Height);
+                if (veil > 0.004f)
+                    using (SolidBrush black = new SolidBrush(Color.FromArgb((int)Math.Round(255 * veil), 0, 0, 0)))
+                        g.FillRectangle(black, dx, dy, dw, dh);
+                DrawPicture(g, MapArt.Shore(d, l.DetailCrop, dw, dh), dx, dy, show);
+                DrawPicture(g, MapArt.Overlay(d, l.DetailCrop, dw, dh, l.DetailOverlayKey, og => DrawDetailOverlay(og, l, dw, dh)), dx, dy, show);
+            }
+            // at most one picture a frame, so a replay never waits
+            if (fr.Length > 0 && !MapArt.WarmOne(map, l.MapCrop, mw, mh, fr) && l.Detail.Width > 0 && map.Detail != null)
+                MapArt.WarmOne(map.Detail, l.DetailCrop, (int)Math.Round(l.Detail.Width), (int)Math.Round(l.Detail.Height), fr);
+        }
+
+        /// <summary>The close-up's weather: the same pictures as the map, at the same moment of the loop.</summary>
+        private static void DrawDetailFrames(Graphics g, Layout l, float ox, float oy, MapFrame[] fr, int i, int j, float t, float dim)
+        {
+            if (l.Detail.Width <= 0 || l.MapData.Detail == null) return;
+            WeatherMap d = l.MapData.Detail;
+            int dx = (int)Math.Round(ox + l.Detail.X), dy = (int)Math.Round(oy + l.Detail.Y);
+            int dw = (int)Math.Round(l.Detail.Width), dh = (int)Math.Round(l.Detail.Height);
+            Bitmap a = MapArt.Frame(d, l.DetailCrop, dw, dh, fr[i], true);
+            Bitmap b = t > 0 && j != i ? MapArt.Frame(d, l.DetailCrop, dw, dh, fr[j], true) : null;
+            DrawPicture(g, a, dx, dy, dim * (b != null ? 1 - t : 1));
+            if (b != null) DrawPicture(g, b, dx, dy, dim * t);
+        }
+
+        /// <summary>How wide the radar's legend is ("LIGHT", five swatches, "HEAVY"), as DrawMapOverlay draws it.</summary>
+        private static float LegendWidth(Graphics g, Layout l)
+        {
+            Face f = l.Label;
+            float sw = (float)Math.Round(f.CapHeight), gap = Math.Max(2f, (float)Math.Round(sw * 0.3f));
+            return Measure(g, "LIGHT", f.Font, l.Track) + sw * 0.6f + 5 * (sw + gap) - gap + sw * 0.6f + Measure(g, "HEAVY", f.Font, l.Track);
+        }
+
+        /// <summary>
+        /// The map's credit, fitted to room: where it would run into the legend (a narrow map, 2026-11-21), the
+        /// public-domain sources drop out from the end of the list ("NOAA · USGS · CENSUS" go before anything
+        /// else), and the last one, OpenStreetMap's, whose licence asks for the credit, always stays.
+        /// </summary>
+        internal static string FitCredit(Graphics g, string credit, Font font, float tracking, float room)
+        {
+            const string Sep = "  ·  ";
+            List<string> parts = new List<string>(credit.Split(new[] { Sep }, StringSplitOptions.None));
+            string text = credit;
+            while (parts.Count > 1 && Measure(g, text, font, tracking) > room)
+            {
+                parts.RemoveAt(parts.Count - 2);
+                text = string.Join(Sep, parts.ToArray());
+            }
+            return text;
+        }
+
+        /// <summary>The close-up's overlay: home, as on the map.</summary>
+        private static void DrawDetailOverlay(Graphics og, Layout l, int w, int h)
+        {
+            og.SmoothingMode = SmoothingMode.AntiAlias;
+            og.PixelOffsetMode = PixelOffsetMode.HighQuality;
+            if (!float.IsNaN(l.DetailHome.X))
+            {
+                float d = Math.Max(6f, (float)Math.Round(l.Unit / 14f)), ring = Math.Max(1.5f, d * 0.24f);
+                PointF p = l.DetailHome;
+                using (SolidBrush halo = new SolidBrush(Color.Black))
+                    og.FillEllipse(halo, p.X - d / 2f - ring, p.Y - d / 2f - ring, d + 2 * ring, d + 2 * ring);
+                using (SolidBrush dot = new SolidBrush(Accent))
+                    og.FillEllipse(dot, p.X - d / 2f, p.Y - d / 2f, d, d);
+            }
         }
 
         /// <summary>
@@ -1114,7 +1226,8 @@ namespace ClaudeCurtain
             }
             if (l.MapData.Credit.Length > 0)
             {
-                string credit = l.MapData.Credit.ToUpperInvariant();
+                float room = mw - 2 * pad - (legend ? LegendWidth(og, l) + f.CapHeight * 1.5f : 0);
+                string credit = FitCredit(og, l.MapData.Credit.ToUpperInvariant(), f.Font, l.Track, room);
                 DrawText(og, credit, f.Font, Tertiary, (float)Math.Round(mw - pad - Measure(og, credit, f.Font, l.Track)), (float)Math.Round(baseline - f.Ascent), l.Track, 0);
             }
             if (legend)

@@ -372,6 +372,18 @@ And in the left column:
   last three days, with how far and which way when off the map), then watches and advisories, each with
   when it ends.
 
+  The close-up: on a landscape screen, in the room beside the message under the map, a map of the
+  town around home, 11.5 km tall, home 7/10 of the way across (change `DetailViewKm` and
+  `DetailWestShare` in `WeatherMap.cs` to frame it differently). It plays the map's own radar or cloud
+  pictures at the same moment of the loop, so the two always agree, the radar's 1 km cells softened by
+  a third of a cell where blown up this far so showers come out round. Its own ground is fetched once
+  per place: a box of 0.3 x 0.7 degrees around the place rounded to a tenth of a degree (more of it
+  west), at about 25 m a pixel, with the land and water map, the hydrography's water, marsh and
+  creeks, the US Census Bureau's TIGER streets (public domain; local streets a faint weave, state
+  routes and freeways a step lighter and drawn over water too, so bridges show) and zoom-12 elevation
+  (about 30 m, the relief's exaggeration eased at this scale). No label, alerts or stations: the
+  ground, the weather and home.
+
   Under the weather, the **relief**: the land's shape from AWS Terrain Tiles (in the United States, USGS
   3DEP elevation; about 120 m a cell at zoom 10, about 70 tiles, 7 MB, fetched once per place), sampled
   four times a screen pixel and softened by only a pixel, so ridges and valleys stay crisp. Hills are lit
@@ -399,7 +411,8 @@ And in the left column:
   `curtain-weather.ps1` fetches all of this into `local\` alongside the forecast (`map.txt` lists the
   pictures, the station reports and the tide) and, in the background, refreshes it every 5 minutes
   (`-MapMinutes`), keeping only the last hour of pictures. The map's credit reads "NOAA · USGS ·
-  © OpenStreetMap".
+  Census · © OpenStreetMap" (Census with the close-up's streets); where a narrow map's credit would run into
+  the legend, the public-domain sources drop out first and OpenStreetMap's always stays.
   Requests carry a box of 1.6 × 3.4 degrees around the forecast grid (0.6° south of it to 1.0° north),
   rounded to a tenth of a degree (about
   10 km), so the servers learn the area, never the address; no key, no account. Pictures more than three
@@ -454,7 +467,7 @@ Please read these before relying on the curtain.
 ```
 
 They use a throwaway PIN in `local\test` and never touch the real one, and they never call your notify
-hook. How much to run follows what changed (since 2026-11-21): a change to what is drawn or to the weather data gets the self-tests, preview renders and the `smoke` and `off` stages (a real curtain up and down); the full lifecycle and desktop suites run when input, the PIN, the lifecycle or anything security-related changes, since they prove the curtain can never trap anyone. The self-tests (~152 checks, including PIN hashing/entry rules, which key presses belong to your own
+hook. How much to run follows what changed (since 2026-11-21): a change to what is drawn or to the weather data gets the self-tests, preview renders and the `smoke` and `off` stages (a real curtain up and down); the full lifecycle and desktop suites run when input, the PIN, the lifecycle or anything security-related changes, since they prove the curtain can never trap anyone. The self-tests (~161 checks, including PIN hashing/entry rules, which key presses belong to your own
 unlock, the time-zone label, the stats sampler, weather-file reading, and the design: every state rendered
 at 720p, 1080p, 16:10, 1440p, ultrawide and portrait, fitting the screen, the columns exactly φ : 1, the
 forecast's header on the map's line,
@@ -500,7 +513,7 @@ Set in Bahnschrift (Microsoft, after DIN 1451). Grid, type scale, margins and dr
 golden ratio. Drawn with GDI+ from the C# compiler inside Windows, with no external assets: the weather
 symbols, sparklines and bars are all code, and the map is drawn pixel by pixel from NOAA's radar,
 satellite, station and tide numbers, over relief from USGS elevation (AWS Terrain Tiles), a land and
-water map from NASA GIBS (© OpenStreetMap contributors) and the USGS National Hydrography Dataset. Designed, built and tested with
+water map from NASA GIBS (© OpenStreetMap contributors), the USGS National Hydrography Dataset and the US Census Bureau's TIGER streets. Designed, built and tested with
 [Claude Code](https://claude.com/claude-code).
 
 ## License

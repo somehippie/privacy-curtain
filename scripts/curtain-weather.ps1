@@ -345,12 +345,12 @@ function Get-MapUrl([string]$Service, [string]$Layer, [double[]]$Box, [int]$Widt
 
 # Marsh: the hydrography's swamps and marshes and its inundation areas (seasonal wetlands, flood basins), as a
 # mask on the same grid; the curtain draws it as rows of short dashes, like a topographic print.
-function Get-MarshUrl([double[]]$Box, [int]$Width, [int]$Height) {
+function Get-MarshUrl([double[]]$Box, [int]$Width, [int]$Height, [int]$Dpi = 48) {
     $fill = '{"type":"simple","symbol":{"type":"esriSFS","style":"esriSFSSolid","color":[0,255,0,255],"outline":{"type":"esriSLS","style":"esriSLSNull","color":[0,0,0,0],"width":0}}}'
     $layers = '[{"id":10,"source":{"type":"mapLayer","mapLayerId":10},"definitionExpression":"FTYPE = ''SwampMarsh''","drawingInfo":{"renderer":' + $fill +
               ',"showLabels":false},"minScale":0,"maxScale":0},{"id":7,"source":{"type":"mapLayer","mapLayerId":7},"definitionExpression":"FTYPE = ''Inundation Area''","drawingInfo":{"renderer":' + $fill +
               ',"showLabels":false},"minScale":0,"maxScale":0}]'
-    return Get-HydroUrl $Box $Width $Height $layers
+    return Get-HydroUrl $Box $Width $Height $layers $Dpi
 }
 
 # Creeks: the hydrography's streams and ditches from Strahler order 2 up (order 1, every gully, would be a
@@ -358,7 +358,7 @@ function Get-MarshUrl([double[]]$Box, [int]$Width, [int]$Height) {
 # and the green channel full for water that flows all year (perennial streams, canals and ditches) and empty
 # for seasonal creeks (intermittent, ephemeral or not known), which the curtain draws less blue. The year-round
 # layer comes first in the list, so it draws on top where the two meet.
-function Get-StreamsUrl([double[]]$Box, [int]$Width, [int]$Height) {
+function Get-StreamsUrl([double[]]$Box, [int]$Width, [int]$Height, [int]$Dpi = 48) {
     $layer = {
         param($id, $g, $where)
         $line = { param($r) '{"type":"esriSLS","style":"esriSLSSolid","color":[' + $r + ',' + $g + ',255,255],"width":1.5}' }
@@ -369,7 +369,7 @@ function Get-StreamsUrl([double[]]$Box, [int]$Width, [int]$Height) {
     }
     $yearRound = & $layer 101 255 "(FCODE = 46006 OR FTYPE = 'CanalDitch')"
     $seasonal = & $layer 102 0 "FTYPE = 'StreamRiver' AND FCODE <> 46006"
-    return Get-HydroUrl $Box $Width $Height ('[' + $yearRound + ',' + $seasonal + ']')
+    return Get-HydroUrl $Box $Width $Height ('[' + $yearRound + ',' + $seasonal + ']') $Dpi
 }
 
 function Get-HydroUrl([double[]]$Box, [int]$Width, [int]$Height, [string]$Layers, [int]$Dpi = 48) {
@@ -396,7 +396,7 @@ function Get-WaterFineUrl([double[]]$Box, [int]$Width, [int]$Height) {
 # The USGS hydrography service's export as a water mask: rivers, bays, canals, lakes, reservoirs and estuaries
 # in plain blue, without the outlines and names of its own style and without marsh, at any scale (its small-
 # scale layers would otherwise switch off at this size). Same grid as the land and water map.
-function Get-WaterUrl([double[]]$Box, [int]$Width, [int]$Height) {
+function Get-WaterUrl([double[]]$Box, [int]$Width, [int]$Height, [int]$Dpi = 48) {
     $fill = '{"type":"simple","symbol":{"type":"esriSFS","style":"esriSFSSolid","color":[0,0,255,255],"outline":{"type":"esriSLS","style":"esriSLSNull","color":[0,0,0,0],"width":0}}}'
     $area = "FTYPE IN ('StreamRiver','BayInlet','SeaOcean','CanalDitch','Lock Chamber','Submerged Stream')"
     $body = "FTYPE IN ('LakePond','Reservoir','Estuary') AND AREASQKM >= 0.05"   # stock ponds too (0.2 km2 until 2026-11-21), not specks
@@ -405,7 +405,7 @@ function Get-WaterUrl([double[]]$Box, [int]$Width, [int]$Height) {
               '","drawingInfo":{"renderer":' + $fill + ',"showLabels":false},"minScale":0,"maxScale":0}]'
     $bbox = (@($Box[1], $Box[0], $Box[3], $Box[2]) | ForEach-Object { $_.ToString('0.###', $inv) }) -join ','   # west,south,east,north
     return 'https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/export?bbox=' + $bbox + '&bboxSR=4326&imageSR=4326' +
-           "&size=$Width,$Height&dpi=48&format=png32&transparent=true&dynamicLayers=" + [uri]::EscapeDataString($layers) + '&f=image'
+           "&size=$Width,$Height&dpi=$Dpi&format=png32&transparent=true&dynamicLayers=" + [uri]::EscapeDataString($layers) + '&f=image'
 }
 
 # Downloads a picture to a temporary name, checks it is one, then moves it into place.
@@ -472,8 +472,8 @@ function Get-TileY([double]$Lat, [int]$Z) {
     return [int][Math]::Floor((1 - [Math]::Log([Math]::Tan($r) + 1 / [Math]::Cos($r)) / [Math]::PI) / 2 * [Math]::Pow(2, $Z))
 }
 
-function Update-Dem([double[]]$Box) {
-    $z = 10
+function Update-Dem([double[]]$Box, [int]$Zoom = 10) {
+    $z = $Zoom
     $x0 = Get-TileX $Box[1] $z; $x1 = Get-TileX $Box[3] $z
     $y0 = Get-TileY $Box[2] $z; $y1 = Get-TileY $Box[0] $z
     $names = @{}
@@ -485,8 +485,68 @@ function Update-Dem([double[]]$Box) {
             if (-not (Test-Path $path)) { Save-MapImage "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/$z/$x/$y.png" $path }
         }
     }
-    Get-ChildItem -Path $LocalDir -Filter 'dem-*.png' | Where-Object { -not $names.ContainsKey($_.Name) } | Remove-Item -Force -ErrorAction SilentlyContinue
+    # only this zoom's tiles: the close-up keeps its own, finer ones
+    Get-ChildItem -Path $LocalDir -Filter "dem-$z-*.png" | Where-Object { -not $names.ContainsKey($_.Name) } | Remove-Item -Force -ErrorAction SilentlyContinue
     return ('dem {0} {1} {2} {3} {4}' -f $z, $x0, $y0, $x1, $y1)
+}
+
+# Streets for the close-up: the Census Bureau's TIGER roads (public domain) as a mask, local streets in the
+# green channel and the bigger roads in the red one (state routes 170, freeways 255), drawn after the streets
+# so they win where they cross. The service draws its street layer only at close scales and works out the scale
+# from the dpi, so it is asked at 24 dpi; the line widths are in points, a pixel each at that dpi for a street.
+function Get-RoadsUrl([double[]]$Box, [int]$Width, [int]$Height) {
+    $layer = {
+        param($id, $r, $g, $width)
+        '{"id":' + $id + ',"source":{"type":"mapLayer","mapLayerId":' + $id + '},"drawingInfo":{"renderer":{"type":"simple","symbol":{"type":"esriSLS","style":"esriSLSSolid","color":[' +
+            $r + ',' + $g + ',0,255],"width":' + $width + '}},"showLabels":false},"minScale":0,"maxScale":0}'
+    }
+    $layers = '[' + (& $layer 8 0 255 3) + ',' + (& $layer 6 170 0 4.5) + ',' + (& $layer 2 255 0 6) + ']'
+    $bbox = (@($Box[1], $Box[0], $Box[3], $Box[2]) | ForEach-Object { $_.ToString('0.###', $inv) }) -join ','   # west,south,east,north
+    return 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Transportation/MapServer/export?bbox=' + $bbox + '&bboxSR=4326&imageSR=4326' +
+           "&size=$Width,$Height&dpi=24&format=png32&transparent=true&dynamicLayers=" + [uri]::EscapeDataString($layers) + '&f=image'
+}
+
+# The close-up under the map (2026-11-21): a box 0.3 x 0.7 degrees (about 33 x 60 km) around the place rounded to
+# a tenth of a degree, like the big box, so the servers learn the area and not the address; more of it lies west
+# of the place, since the close-up shows home 7/10 of the way across (its shape needs up to 0.42 degree west of
+# home at 50 degrees north). Its own ground at
+# 0.00025 degree a pixel (about 25 m): the land and water, the hydrography's water, marsh and creeks, streets,
+# and zoom-12 elevation (about 30 m). Fetched once per place, best-effort, each part on its own. The weather on
+# it is the big map's own pictures, so the two always show the same moment. Returns its map.txt lines.
+$detailHalfLat = 0.15
+$detailWest = 0.45
+$detailEast = 0.25
+$detailCell = 0.00025
+
+function Update-Detail([double]$CLat, [double]$CLon) {
+    [double[]]$dBox = @(($CLat - $detailHalfLat), ($CLon - $detailWest), ($CLat + $detailHalfLat), ($CLon + $detailEast))
+    $tag = ($dBox | ForEach-Object { $_.ToString('0.00', $inv) }) -join '_'
+    $w = [int][Math]::Round(($detailWest + $detailEast) / $detailCell)
+    $h = [int][Math]::Round(2 * $detailHalfLat / $detailCell)
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('detail box ' + (($dBox | ForEach-Object { $_.ToString('0.00', $inv) }) -join ' '))
+    foreach ($dk in 'base', 'water', 'waterfine', 'marsh', 'streams', 'roads') {
+        $name = 'map-detail-{0}-{1}.png' -f $dk, $tag
+        $path = Join-Path $LocalDir $name
+        if (-not (Test-Path $path)) {
+            try {
+                $url = switch ($dk) {
+                    'base'      { Get-MapUrl 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi' 'OSM_Land_Water_Map' $dBox $w $h 'image/png' '' }
+                    'water'     { Get-WaterUrl $dBox $w $h 96 }   # 96 dpi: the small-scale layers' own range
+                    'waterfine' { Get-WaterFineUrl $dBox $w $h }
+                    'marsh'     { Get-MarshUrl $dBox $w $h 96 }
+                    'streams'   { Get-StreamsUrl $dBox $w $h 96 }
+                    default     { Get-RoadsUrl $dBox $w $h }
+                }
+                Save-MapImage $url $path 90
+                Get-ChildItem -Path $LocalDir -Filter "map-detail-$dk-*.png" | Where-Object { $_.Name -ne $name } | Remove-Item -Force -ErrorAction SilentlyContinue
+            } catch { Write-Host "Close-up $dk skipped: $($_.Exception.Message)" }
+        }
+        if (Test-Path $path) { $lines.Add("detail $dk $name") }
+    }
+    if (-not ($lines | Where-Object { $_ -like 'detail base *' })) { return @() }   # no ground, no close-up
+    try { $lines.Add('detail ' + (Update-Dem $dBox 12)) } catch { Write-Host "Close-up elevation skipped: $($_.Exception.Message)" }
+    return $lines.ToArray()
 }
 
 # Tides: the nearest NOAA tide station that keeps its own predictions (a "reference" station) within 60 km,
@@ -730,6 +790,8 @@ function Update-Map {
     catch { Write-Host "Earthquakes skipped: $($_.Exception.Message)"; $quakes = Get-MapEntries 'quake' }
     try { $tides = Get-TideLines $center[0] $center[1] $boxText }
     catch { Write-Host "Tides skipped: $($_.Exception.Message)"; $tides = @(Get-MapEntries 'tidestation') + @(Get-MapEntries 'tide') }
+    try { $detail = @(Update-Detail $cLat $cLon) }
+    catch { Write-Host "Close-up skipped: $($_.Exception.Message)"; $detail = Get-MapEntries 'detail' }
 
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add(('# weather map for the curtain, as of {0}' -f (Get-Date -Format 't')))
@@ -737,8 +799,9 @@ function Update-Map {
     $lines.Add("base $baseName")
     if (Test-Path $waterPath) { $lines.Add("water $waterName") }
     foreach ($hk in 'waterfine', 'marsh', 'streams') { if ($hydro[$hk]) { $lines.Add("$hk $($hydro[$hk])") } }
-    foreach ($l in @($dem) + @($radar) + @($sat) + @($stations) + @($tides) + @($alerts) + @($quakes)) { if ($l) { $lines.Add($l) } }
-    $lines.Add(('credit NOAA  {0}  USGS  {0}  {1} OpenStreetMap' -f [char]0x00B7, [char]0x00A9))
+    foreach ($l in @($dem) + @($detail) + @($radar) + @($sat) + @($stations) + @($tides) + @($alerts) + @($quakes)) { if ($l) { $lines.Add($l) } }
+    $census = if (@($detail) -match '^detail roads ') { '  {0}  Census' -f [char]0x00B7 } else { '' }
+    $lines.Add(('credit NOAA  {0}  USGS{2}  {0}  {1} OpenStreetMap' -f [char]0x00B7, [char]0x00A9, $census))
     Write-Atomic $mapFile $lines
 
     # Only now that map.txt no longer lists them: remove pictures that dropped out of the last hour.
