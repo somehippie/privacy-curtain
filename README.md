@@ -4,7 +4,7 @@ A black screen that covers every monitor and blocks the physical keyboard and mo
 (injected) clicks, typing and screenshots keep working underneath. It's for hiding an automated session on
 a machine you share a room with, without taking the machine away from yourself.
 
-![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone, a radar map of the San Francisco Bay Area below it with its hills shaded and contoured, a few light showers off the coast, temperatures around the Bay and a tide table in the corner, the message "PC in use by Claude", and a data column with ten-minute CPU and network sparklines, memory and disk bars, then the forecast: humidity, wind, sunrise and sunset, the next six hours as a temperature curve over rain-chance bars, and three days](docs/curtain.png)
+![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone; a radar map of the San Francisco Bay Area below it, its hills shaded and contoured and no rain on it, with temperatures around the Bay, a tide table in one corner and the weather alerts in the other; under the map the message "PC in use by Claude" beside a close-up of the town's streets; and a data column with ten-minute CPU and network sparklines, memory and disk bars, then the forecast: the conditions now as small symbols (humidity, dew point, wind, sunrise and sunset), the next six hours as a temperature curve over rain-chance bars, and three days as small temperature and wind graphs](docs/curtain.png)
 
 Awareness, not lockout: it counts and logs every blocked key press, click and escape attempt, can ping your
 phone while someone is at the keyboard, and shows a "While you were away" summary when you unlock. The
