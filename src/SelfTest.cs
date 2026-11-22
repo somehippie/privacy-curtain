@@ -989,7 +989,8 @@ namespace ClaudeCurtain
                 GeoBox dc = WeatherMap.DetailCrop(db, 45.0, -122.0, 560, 190);
                 double across = (-122.0 - dc.West) / (dc.East - dc.West), down = (dc.North - 45.0) / (dc.North - dc.South);
                 GeoBox edge = WeatherMap.DetailCrop(db, 45.09, -121.86, 560, 190);
-                Check("close-up: 4.6 km tall at the screen's shape, home 7/10 of the way across (the town to the west) and halfway down; inside its box near the edge",
+                Check("close-up: " + WeatherMap.DetailViewKm.ToString("0.0#", System.Globalization.CultureInfo.InvariantCulture) +
+                      " km tall at the screen's shape, home 7/10 of the way across (the town to the west) and halfway down; inside its box near the edge",
                       Math.Abs(dc.KmTall - WeatherMap.DetailViewKm) < 0.01 && Math.Abs(dc.KmWide / dc.KmTall - 560 / 190.0) < 0.01 &&
                       Math.Abs(across - WeatherMap.DetailWestShare) < 1e-6 && Math.Abs(down - 0.5) < 1e-6 &&
                       edge.North <= db.North + 1e-9 && edge.East <= db.East + 1e-9 && edge.South >= db.South - 1e-9 && edge.West >= db.West - 1e-9);
