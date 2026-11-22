@@ -523,13 +523,13 @@ function Get-StreamsFineUrl([double[]]$Box, [int]$Width, [int]$Height) {
 
 # The close-up under the map (2026-11-21): a box 0.2 x 0.4 degrees (about 22 x 35 km) around the place rounded to
 # a tenth of a degree, like the big box, so the servers learn the area and not the address; more of it lies west
-# of the place, since the close-up shows home 7/10 of the way across (its shape needs up to 0.23 degree west of
+# of the place, since the close-up shows home 7/10 of the way across (its shape needs up to 0.24 degree west of
 # the rounded place at 50 degrees north). Its own ground at 0.000125 degree a pixel (about 12 m): the land and water, the
 # hydrography's water, marsh and creeks, streets, and zoom-13 elevation (about 15 m). Fetched once per place,
 # best-effort, each part on its own. The weather on it is the big map's own pictures, so the two always show the
 # same moment. Returns its map.txt lines. (The first close-up, 11.5 km tall, had a box of 0.3 x 0.7 degrees at
 # twice the cell and zoom-12 elevation; the user found it "too zoomed out", so it showed 4.6 km, then "a little
-# too zoomed in", so 5.5 km since.)
+# too zoomed in", so 5.5 km, and since 5.75 km: twice as close as the first, the user's own estimate.)
 $detailHalfLat = 0.1
 $detailWest = 0.25
 $detailEast = 0.15

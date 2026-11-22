@@ -160,8 +160,9 @@ namespace ClaudeCurtain
         public byte[] Roads = new byte[0];        // the bigger roads (close-up only), 0 ... 255 by size, on the base grid
         public byte[] Streets = new byte[0];      // local streets, 0 ... 255, the same way
         // the close-up's height: 11.5 km at first ("too zoomed out, I'd want at least 2x or more"), then 4.6 ("might be
-        // a little too zoomed in now, don't back too far out just a bit"), now about 2.1 times closer than the first
-        public const double DetailViewKm = 5.5;
+        // a little too zoomed in now, don't back too far out just a bit"), then 5.5, now exactly twice as close as the
+        // first: the user's own estimate of 2x was right
+        public const double DetailViewKm = 5.75;
         public const double DetailWestShare = 0.7; // home 7/10 of the way across: the larger part of the view west
 
         public const double StationStaleHours = 2;   // older station reports are never shown
