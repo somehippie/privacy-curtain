@@ -373,8 +373,9 @@ And in the left column:
   when it ends.
 
   The close-up: on a landscape screen, in the room beside the message under the map, a map of the
-  town around home, 5.75 km tall (about 31 m a pixel), home 7/10 of the way across (change
-  `DetailViewKm` and `DetailWestShare` in `WeatherMap.cs` to frame it differently). It plays the
+  town around home, 7.5 km tall (about 35 m a pixel), reaching 2.9 km south of home and the rest north,
+  home 7/10 of the way across (change `DetailViewKm`, `DetailSouthKm` and `DetailWestShare` in
+  `WeatherMap.cs` to frame it differently). It plays the
   map's own radar or cloud pictures at the same moment of the loop, so the two always agree, the
   radar's 1 km cells softened by a third of a cell where blown up this far so showers come out round.
   Its own ground is fetched once per place: a box of 0.2 x 0.4 degrees around the place rounded to a

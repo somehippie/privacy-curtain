@@ -160,9 +160,11 @@ namespace ClaudeCurtain
         public byte[] Roads = new byte[0];        // the bigger roads (close-up only), 0 ... 255 by size, on the base grid
         public byte[] Streets = new byte[0];      // local streets, 0 ... 255, the same way
         // the close-up's height: 11.5 km at first ("too zoomed out, I'd want at least 2x or more"), then 4.6 ("might be
-        // a little too zoomed in now, don't back too far out just a bit"), then 5.5, now exactly twice as close as the
-        // first: the user's own estimate of 2x was right
-        public const double DetailViewKm = 5.75;
+        // a little too zoomed in now, don't back too far out just a bit"), 5.5, and 5.75 (twice as close as the first,
+        // the user's own estimate); now 7.5, its south edge where 5.75 put it and the rest to the north (the user: more
+        // of the town to the north, "keep the lower bound the same")
+        public const double DetailViewKm = 7.5;
+        public const double DetailSouthKm = 2.875;  // how far the close-up reaches south of home; the rest of it lies north
         public const double DetailWestShare = 0.7; // home 7/10 of the way across: the larger part of the view west
 
         public const double StationStaleHours = 2;   // older station reports are never shown
@@ -1050,7 +1052,8 @@ namespace ClaudeCurtain
 
         /// <summary>
         /// The part of the close-up's box a w x h close-up shows: DetailViewKm tall (less if the box is too small
-        /// for the shape), home 7/10 of the way across and halfway down; slid inward near the box's edge.
+        /// for the shape), home 7/10 of the way across, its south edge DetailSouthKm south of home (at most half
+        /// the height) and the rest north; slid inward near the box's edge.
         /// </summary>
         internal static GeoBox DetailCrop(GeoBox box, double lat, double lon, int w, int h)
         {
@@ -1064,7 +1067,8 @@ namespace ClaudeCurtain
             double dLat = hk / KmPerDegree, dLon = wk / kmLon;
             double cLat = double.IsNaN(lat) ? midLat : lat, cLon = double.IsNaN(lon) ? (box.West + box.East) / 2 : lon;
             double westShare = double.IsNaN(lon) ? 0.5 : DetailWestShare;
-            double s = Math.Max(box.South, Math.Min(box.North - dLat, cLat - dLat / 2));
+            double south = double.IsNaN(lat) ? dLat / 2 : Math.Min(dLat / 2, DetailSouthKm / KmPerDegree);
+            double s = Math.Max(box.South, Math.Min(box.North - dLat, cLat - south));
             double we = Math.Max(box.West, Math.Min(box.East - dLon, cLon - dLon * westShare));
             return new GeoBox(s, we, s + dLat, we + dLon);
         }
