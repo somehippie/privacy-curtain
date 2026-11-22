@@ -98,6 +98,7 @@ namespace ClaudeCurtain
         public const int HistoryLength = 600;   // one reading a second
         private readonly float[] cpuRing = new float[HistoryLength];
         private readonly float[] netRing = new float[HistoryLength];
+        private readonly float[] memRing = new float[HistoryLength];
         private int ringCount, ringNext, version;
         private double cpuNow = -1, memPct = -1, memUsed, memTotal, netDown = -1, netUp = -1, diskPct = -1, diskFree, diskTotal;
         private long upSecs = -1;
@@ -159,6 +160,7 @@ namespace ClaudeCurtain
         {
             cpuRing[ringNext] = (float)cpuNow;
             netRing[ringNext] = (float)netDown;
+            memRing[ringNext] = (float)memPct;
             ringNext = (ringNext + 1) % HistoryLength;
             if (ringCount < HistoryLength) ringCount++;
 
@@ -170,6 +172,7 @@ namespace ClaudeCurtain
             s.UptimeSeconds = upSecs;
             s.CpuHistory = Unroll(cpuRing);
             s.NetHistory = Unroll(netRing);
+            s.MemHistory = Unroll(memRing);
             snapshot = s;
         }
 
@@ -403,6 +406,7 @@ namespace ClaudeCurtain
         public long UptimeSeconds = -1;
         public float[] CpuHistory = new float[0];   // oldest first, one a second; negative = no reading
         public float[] NetHistory = new float[0];   // download bytes per second, same spacing
+        public float[] MemHistory = new float[0];   // percent of memory in use, same spacing
     }
 
     /// <summary>One hour of the hourly forecast.</summary>

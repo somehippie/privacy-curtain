@@ -189,9 +189,9 @@ namespace ClaudeCurtain
                 lines = new[]
                 {
                     "Anytown forecast  (as of 9:05 AM)",
-                    "Today:  Hi 70° / Lo 50°   Partly Sunny  (2% precip)",
-                    "Tonight:  Lo 48°   Mostly Clear",
-                    "Monday:  Hi 64° / Lo 47°   Chance Light Rain then Patchy Fog  (53% precip)",
+                    "Today:  Hi 70° / Lo 50°   Partly Sunny  (2% precip)  [wind 12 mph at 3 PM, gusts 21]",
+                    "Tonight:  Lo 48°   Mostly Clear  [wind 6 mph at 9 PM]",
+                    "Monday:  Hi 64° / Lo 47°   Chance Light Rain then Patchy Fog  (53% precip)  [wind 24 mph at 2 PM, gusts 38]",
                 };
             }
             s.Weather = lines;
@@ -249,7 +249,7 @@ namespace ClaudeCurtain
         {
             Random r = new Random(7);
             int n = SysStats.HistoryLength;
-            float[] cpu = new float[n], net = new float[n];
+            float[] cpu = new float[n], net = new float[n], mem = new float[n];
             for (int i = 0; i < n; i++)
             {
                 double c = 6 + 4 * r.NextDouble();
@@ -258,6 +258,8 @@ namespace ClaudeCurtain
                 double k = 18 * 1024 + 12 * 1024 * r.NextDouble();
                 k += 3.1 * 1048576 * Bump(i, 300, 26) + 0.9 * 1048576 * Bump(i, 520, 12) + 1.2 * 1048576 * Bump(i, 590, 9);
                 net[i] = (float)k;
+                // memory: a slow level that rises with the bursts of work and eases back after them
+                mem[i] = (float)(41 + 3 * i / (double)n + 5 * Bump(i, 310, 40) + 3 * Bump(i, 465, 25) + 0.4 * (r.NextDouble() - 0.5));
             }
             SysSnapshot s = new SysSnapshot();
             s.Version = 1;
@@ -267,6 +269,8 @@ namespace ClaudeCurtain
             s.UptimeSeconds = 3 * 86400 + 4 * 3600 + 12 * 60;
             s.CpuHistory = cpu;
             s.NetHistory = net;
+            s.MemHistory = mem;
+            s.MemPercent = Math.Round(mem[n - 1]);
             return s;
         }
 

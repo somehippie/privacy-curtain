@@ -419,7 +419,7 @@ namespace ClaudeCurtain
                 big.Weather = new[]
                 {
                     "Anytown forecast  (as of 12:59 PM)",
-                    "Wednesday:  Hi 105° / Lo -9°   Chance Showers And Thunderstorms Then Patchy Blowing Dust  (100% precip)",
+                    "Wednesday:  Hi 105° / Lo -9°   Chance Showers And Thunderstorms Then Patchy Blowing Dust  (100% precip)  [wind 199 mph at 12 PM, gusts 299]",
                     "Thursday:  Hi 99° / Lo 88°   Sunny  (100% precip)",
                     "Saturday:  Hi 99° / Lo 88°   Sunny",
                 };
@@ -447,6 +447,31 @@ namespace ClaudeCurtain
                     }
                 }
                 Check("painter: changing readings, times and forecasts never resize or move the composition" + (stable ? "" : " (" + diff + ")"), stable);
+            }
+
+            // The days' peak wind: read from the line, shown in the row, amber when it is windy, and a line
+            // without it still reads as before.
+            {
+                Options po = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") };
+                DisplayState calm = CurtainPreview.Sample(po, "idle"), windy = CurtainPreview.Sample(po, "idle"), none = CurtainPreview.Sample(po, "idle");
+                string head = "Anytown forecast  (as of 9:05 AM)";
+                calm.Weather = new[] { head, "Today:  Hi 70° / Lo 50°   Partly Sunny  (2% precip)  [wind 8 mph at 3 PM, gusts 14]" };
+                windy.Weather = new[] { head, "Today:  Hi 70° / Lo 50°   Partly Sunny  (2% precip)  [wind 8 mph at 3 PM, gusts 34]" };
+                none.Weather = new[] { head, "Today:  Hi 70° / Lo 50°   Partly Sunny  (2% precip)" };
+                Func<DisplayState, List<string>> texts = st =>
+                {
+                    List<string> t = new List<string>();
+                    foreach (KeyValuePair<string, Color> op in CurtainPainter.TextOpsForTest(st, 2560, 1440)) t.Add(op.Key + "|" + op.Value.ToArgb());
+                    return t;
+                };
+                List<string> tc = texts(calm), tw = texts(windy), tn = texts(none);
+                bool calmShown = tc.Contains("8 mph|" + CurtainPainter.Secondary.ToArgb()) && tc.Exists(t => t.StartsWith("peak 3 PM  \u00B7  gusts 14|"));
+                bool windyAmber = tw.Contains("8 mph|" + CurtainPainter.Warn.ToArgb());
+                bool plain = !tn.Exists(t => t.Contains(" mph|")) && tn.Contains("Partly sunny|" + CurtainPainter.Tertiary.ToArgb()) &&
+                             tn.Contains("2%|" + CurtainPainter.Tertiary.ToArgb());
+                Check("forecast: each day shows its peak wind, when it peaks and the strongest gust (" + calmShown + "), amber from gusts of " +
+                      CurtainPainter.WindyGustMph + " (" + windyAmber + "), and a day without wind reads as before (" + plain + ")",
+                      calmShown && windyAmber && plain);
             }
 
             // The hourly forecast file.

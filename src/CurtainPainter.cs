@@ -454,7 +454,8 @@ namespace ClaudeCurtain
 
         private static readonly Regex WeatherHead = new Regex(@"^(?<place>.+?)\s+forecast\s*\(as of (?<asof>[^)]+)\)\s*$", RegexOptions.IgnoreCase);
         private static readonly Regex WeatherRow = new Regex(
-            @"^(?<day>[^:]+):\s+(?:Hi\s+(?<hi>-?\d+\S?))?\s*/?\s*(?:Lo\s+(?<lo>-?\d+\S?))?\s+(?<desc>.+?)(?:\s+\((?<pop>\d+)% precip\))?\s*$",
+            @"^(?<day>[^:]+):\s+(?:Hi\s+(?<hi>-?\d+\S?))?\s*/?\s*(?:Lo\s+(?<lo>-?\d+\S?))?\s+(?<desc>.+?)(?:\s+\((?<pop>\d+)% precip\))?" +
+            @"(?:\s+\[wind (?<wind>\d+) mph at (?<wat>[^,\]]+?)(?:, gusts (?<gust>\d+))?\])?\s*$",
             RegexOptions.IgnoreCase);
 
         /// <summary>Lays the composition out at the largest scale that leaves room for the drift.</summary>
@@ -697,6 +698,11 @@ namespace ClaudeCurtain
                     g.SmoothingMode = SmoothingMode.AntiAlias;
                     g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                     foreach (Op op in ops) Render(g, op, L.OriginX, L.OriginY, unit);
+                    if (capturedText != null)
+                    {
+                        capturedText.Clear();
+                        foreach (Op op in ops) if (op.Kind == 0) capturedText.Add(new KeyValuePair<string, Color>(op.Text, op.Color));
+                    }
                 }
                 return L;
             }
@@ -1249,6 +1255,9 @@ namespace ClaudeCurtain
                     rm.Groups["lo"].Success ? rm.Groups["lo"].Value : "",
                     rm.Groups["desc"].Value.Trim(),
                     rm.Groups["pop"].Success ? rm.Groups["pop"].Value + "%" : "",
+                    rm.Groups["wind"].Success ? rm.Groups["wind"].Value : "",
+                    rm.Groups["wat"].Success ? rm.Groups["wat"].Value.Trim() : "",
+                    rm.Groups["gust"].Success ? rm.Groups["gust"].Value : "",
                 });
             }
             HourPoint[] hours = NextHours(s.Hourly, s.Now, 6);
@@ -1390,8 +1399,29 @@ namespace ClaudeCurtain
                             float dw = drop * 0.62f;
                             ops.Add(new Op { Kind = 6, X = px - gx * 0.25f - dw, Y = y - drop, W = dw, H = drop, Color = Rain });
                         }
+                        float descRight = ox + w;
+                        if (r[5].Length > 0)
+                        {
+                            // The day's peak wind, in the room between the low and the rain: the speed, and under
+                            // it when it peaks and the strongest gust. It takes only room that is free, so it
+                            // never moves anything; amber from 20 mph, or gusts from 30.
+                            float wx0 = lx + tempW + gx;
+                            float room = ox + w - popW - gx * 0.5f - wx0;
+                            string speed = r[5] + " mph";
+                            int sp, gu;
+                            bool windy = (int.TryParse(r[5], out sp) && sp >= WindyMph) || (int.TryParse(r[7], out gu) && gu >= WindyGustMph);
+                            string when = "peak " + r[6] + (r[7].Length > 0 ? "  \u00B7  gusts " + r[7] : "");
+                            if (Measure(m, when, fSmall.Font, 0) > room) when = "peak " + r[6];
+                            if (Measure(m, when, fSmall.Font, 0) > room) when = "";
+                            if (Measure(m, speed, fData.Font, 0) <= room)
+                            {
+                                AddText(ops, m, speed, fData, windy ? Warn : Secondary, wx0, y, 0);
+                                if (when.Length > 0) AddText(ops, m, when, fSmall, Tertiary, wx0, y + line2, 0);
+                                descRight = wx0 - gx * 0.5f;
+                            }
+                        }
                         Op d = AddTextOp(ops, SentenceCase(r[3]), fSmall, Tertiary, ox + tx, y + line2, 0);
-                        d.W = w - tx;
+                        d.W = descRight - (ox + tx);
                     }
                     else if (!parsed && i < raw.Count)
                     {
@@ -1405,6 +1435,24 @@ namespace ClaudeCurtain
             }
             return measure ? needed : y;
         }
+
+        [ThreadStatic] private static List<KeyValuePair<string, Color>> capturedText;
+
+        /// <summary>Self-tests: the text the composition draws into its block, with its colour.</summary>
+        internal static List<KeyValuePair<string, Color>> TextOpsForTest(DisplayState s, int w, int h)
+        {
+            capturedText = new List<KeyValuePair<string, Color>>();
+            try
+            {
+                Layout l = Compose(s, w, h);
+                if (l != null) l.Dispose();
+                return capturedText;
+            }
+            finally { capturedText = null; }
+        }
+
+        public const int WindyMph = 20;       // a day's peak wind from here (or gusts from WindyGustMph) shows in amber
+        public const int WindyGustMph = 30;
 
         private static readonly string[] TileLabels = { "HUMIDITY", "WIND", "SUNRISE", "SUNSET" };
         private static readonly string[] TileTemplates = { "100%", "15–25 mph WNW", "12:59 AM", "12:59 PM" };
@@ -1500,7 +1548,7 @@ namespace ClaudeCurtain
                 bool any = x.Version > 0;
                 rows.Add(new object[] { "CPU", any && x.Cpu >= 0 ? Math.Round(x.Cpu).ToString(CultureInfo.InvariantCulture) + "%" : "--", x.CpuHistory, 100.0, "" });
                 rows.Add(new object[] { "MEMORY", any && x.MemPercent >= 0 ? Math.Round(x.MemPercent).ToString(CultureInfo.InvariantCulture) + "%" : "--",
-                                        any ? x.MemPercent : -1.0, 0.0,
+                                        x.MemHistory, 100.0,   // a sparkline like CPU's since 2026-11-21 (a bar before)
                                         any && x.MemPercent >= 0 ? x.MemUsedGb.ToString("0.0", CultureInfo.InvariantCulture) + " / " + x.MemTotalGb.ToString("0", CultureInfo.InvariantCulture) + " GB" : "" });
                 double peak = 0;
                 foreach (float v in x.NetHistory) if (v > peak) peak = v;

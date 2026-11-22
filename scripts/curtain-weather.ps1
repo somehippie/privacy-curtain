@@ -113,17 +113,68 @@ function Write-Atomic([string]$Path, $Lines) {
     Move-Item -Path $tmp -Destination $Path -Force
 }
 
+# Each hour's wind and gusts (mph) from the forecast grid's raw data, which NWS gives as km/h over intervals
+# ("2026-11-21T16:00:00+00:00/PT3H"). Empty when the request fails: the days then show no wind.
+function Get-WindHours {
+    $hours = @{}
+    try {
+        $g = Invoke-RestMethod -Uri "https://api.weather.gov/gridpoints/$Grid" -Headers @{ 'User-Agent' = $ua } -TimeoutSec $TimeoutSec
+        foreach ($kind in 'windSpeed', 'windGust') {
+            foreach ($v in @($g.properties.$kind.values)) {
+                if ($null -eq $v.value) { continue }
+                $parts = ([string]$v.validTime).Split('/')
+                $start = [DateTimeOffset]::Parse($parts[0], $inv)
+                $span = [Xml.XmlConvert]::ToTimeSpan($parts[1])
+                $mph = [double]$v.value / 1.609344
+                for ($h = 0; $h -lt [Math]::Max(1, [int]$span.TotalHours); $h++) {
+                    $at = $start.AddHours($h).ToLocalTime()
+                    $key = $at.ToString('yyyy-MM-ddTHH', $inv)
+                    if (-not $hours.ContainsKey($key)) { $hours[$key] = [pscustomobject]@{ At = $at; Speed = $null; Gust = $null } }
+                    if ($kind -eq 'windSpeed') { $hours[$key].Speed = $mph } else { $hours[$key].Gust = $mph }
+                }
+            }
+        }
+    } catch {
+        Write-Host "Wind for the days skipped: $($_.Exception.Message)."
+    }
+    return @($hours.Values | Sort-Object At)
+}
+
+# The strongest wind in a stretch of hours, as " [wind 18 mph at 3 PM, gusts 30]" (the first hour it peaks),
+# or '' when the stretch has no hours.
+function Get-WindPeak($WindHours, [DateTimeOffset]$From, [DateTimeOffset]$To) {
+    $in = @($WindHours | Where-Object { $_.At -ge $From -and $_.At -lt $To -and $null -ne $_.Speed })
+    if ($in.Count -eq 0) { return '' }
+    $top = [Math]::Round(($in | Measure-Object -Property Speed -Maximum).Maximum)
+    $peak = $in | Where-Object { [Math]::Round($_.Speed) -eq $top } | Select-Object -First 1
+    $gusts = @($WindHours | Where-Object { $_.At -ge $From -and $_.At -lt $To -and $null -ne $_.Gust })
+    $gustTxt = ''
+    if ($gusts.Count -gt 0) {
+        $gust = [Math]::Round(($gusts | Measure-Object -Property Gust -Maximum).Maximum)
+        if ($gust -gt $top) { $gustTxt = ", gusts $gust" }
+    }
+    return ("  [wind {0} mph at {1}{2}]" -f $top, $peak.At.ToString('h tt', [Globalization.CultureInfo]::GetCultureInfo('en-US')), $gustTxt)
+}
+
 function Update-Daily {
     $r = Invoke-RestMethod -Uri "https://api.weather.gov/gridpoints/$Grid/forecast?units=us" `
                            -Headers @{ 'User-Agent' = $ua } -TimeoutSec $TimeoutSec
     $periods = @($r.properties.periods)
     if ($periods.Count -eq 0) { throw 'no forecast periods returned' }
 
+    $windHours = Get-WindHours
+    $now = [DateTimeOffset]::Now
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add(("{0} forecast  (as of {1})" -f $Place, (Get-Date -Format 't')))
     $shown = 0
     for ($i = 0; $i -lt $periods.Count -and $shown -lt $Days; $i++) {
         $p = $periods[$i]
+        # the hours this row speaks for: its calendar day (from now on, for today), or tonight until 6 AM
+        $from = ConvertTo-Start $p.startTime
+        $day = [DateTimeOffset]::new($from.LocalDateTime.Date, $from.Offset)
+        if ($p.isDaytime) { $from = $day; $to = $day.AddDays(1) } else { $to = $day.AddDays(1).AddHours(6) }
+        if ($from -lt $now) { $from = $now.AddMinutes(-$now.Minute).AddSeconds(-$now.Second) }
+        $windTxt = Get-WindPeak $windHours $from $to
         $hi = $null; $lo = $null
         if ($p.isDaytime) {
             $hi = $p.temperature
@@ -139,7 +190,7 @@ function Update-Daily {
         $pop = $null
         try { $pop = [int]$p.probabilityOfPrecipitation.value } catch {}
         $popTxt = if ($pop -gt 0) { "  ({0}% precip)" -f $pop } else { '' }
-        $lines.Add(("{0}:  {1}   {2}{3}" -f (Get-DayLabel $p), $temp, $desc, $popTxt))
+        $lines.Add(("{0}:  {1}   {2}{3}{4}" -f (Get-DayLabel $p), $temp, $desc, $popTxt, $windTxt))
         $shown++
     }
     Write-Atomic $out $lines

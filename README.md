@@ -218,12 +218,12 @@ about what it is doing. Everything on it comes from one proportional system buil
   Forecast text is set in sentence case. The message is set small (its title C/φ⁵, its two lines C/φ⁶,
   the accent rule nearer the title than the map), so the map gets the height.
 - **Data.** CPU and download rate are ten-minute sparklines with the newest reading at the right and a dot
-  on it; memory and disk are proportion bars. CPU is drawn on a fixed 0–100% scale, so a quiet machine
-  looks quiet. Every value is also printed as text beside its graphic, so nothing depends on reading a
+  on it, and so is memory; disk is a proportion bar. CPU and memory are drawn on a fixed 0–100% scale, so
+  a quiet machine looks quiet. Every value is also printed as text beside its graphic, so nothing depends on reading a
   chart. The forecast opens with four quiet tiles (humidity and wind for this hour, the next sunrise and
   sunset), then the next six hours as a strip: each hour's symbol, its temperature on one smooth curve
   (drawn on at least a 6° range, so a flat afternoon looks flat), and its chance of rain as a bar. Then
-  three days. Rain is the one cool data hue, a muted steel blue. Weather symbols are drawn in code (sun,
+  three days. Each day also shows its peak wind: the strongest sustained speed, and under it the hour it peaks and the strongest gust, from the hourly wind and gust series in the forecast grid's raw data (today counts from now, tonight until 6 AM). It turns amber from 20 mph, or gusts from 30. It takes only the room between the low and the rain, so it never moves anything. Rain is the one cool data hue, a muted steel blue. Weather symbols are drawn in code (sun,
   moon, cloud, partly cloudy, rain, storm, snow, fog, wind).
 - **The weather map.** Under the date, as wide as the clock, with a header ruled like the data column's
   sections ("RADAR · PAST HOUR", the picture's time at the right). On a landscape screen the data column
@@ -296,7 +296,8 @@ The data column:
 - **Machine stats**, live from inside the curtain (sampled once a second, no performance counters, no
   admin): CPU busy %, memory used, download and upload rates, used share of the system drive, and system
   uptime, with ten minutes of history kept in memory for the sparklines.
-- **The local forecast.** Humidity, wind, the next sunrise and sunset, the next six hours, and three days.
+- **The local forecast.** Humidity, wind, the next sunrise and sunset, the next six hours, and three days
+  with each day's peak wind and gusts.
   Set your location in `config.json` (copy `config.example.json`):
 
   ```json
@@ -432,7 +433,7 @@ Please read these before relying on the curtain.
 ```
 
 They use a throwaway PIN in `local\test` and never touch the real one, and they never call your notify
-hook. The self-tests (~139 checks, including PIN hashing/entry rules, which key presses belong to your own
+hook. The self-tests (~140 checks, including PIN hashing/entry rules, which key presses belong to your own
 unlock, the time-zone label, the stats sampler, weather-file reading, and the design: every state rendered
 at 720p, 1080p, 16:10, 1440p, ultrawide and portrait, fitting the screen, the columns exactly φ : 1, the
 forecast's header on the map's line,
