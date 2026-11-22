@@ -1180,10 +1180,13 @@ namespace ClaudeCurtain
             foreach (MapAlert a in alerts)
             {
                 // muted (2026-11-21, the user: "less saturated/vivid ... even if it's only a slight change in
-                // shade"): the colour half way to its own grey, a faint outline and the slightest wash
-                Color col = Muted(a.Level >= 2 ? Wrong : Warn, AlertMute);
-                using (SolidBrush wash = new SolidBrush(Color.FromArgb(a.Level >= 2 ? 11 : 8, col)))
-                using (Pen pen = new Pen(Color.FromArgb(a.Level >= 2 ? 105 : 85, col), lw) { LineJoin = LineJoin.Round })
+                // shade"): a warning's colour half way to its own grey, a faint outline and the slightest wash.
+                // Advisories a step stronger (same evening: the coastal advisory's thin strip had vanished), since
+                // their zones are often narrow coastal or mountain bands with little wash to show
+                bool warning = a.Level >= 2;
+                Color col = Muted(warning ? Wrong : Warn, warning ? AlertMute : AdvisoryMute);
+                using (SolidBrush wash = new SolidBrush(Color.FromArgb(warning ? 11 : 13, col)))
+                using (Pen pen = new Pen(Color.FromArgb(warning ? 105 : 140, col), lw) { LineJoin = LineJoin.Round })
                 {
                     foreach (PointF[] ring in a.Rings)
                     {
@@ -1197,7 +1200,8 @@ namespace ClaudeCurtain
             }
         }
 
-        public const float AlertMute = 0.5f;   // how far the alert areas' colours go toward grey
+        public const float AlertMute = 0.5f;      // how far a warning area's colour goes toward grey
+        public const float AdvisoryMute = 0.25f;  // and a watch's or advisory's
 
         /// <summary>A colour moved toward the grey of its own lightness: 0 keeps it, 1 is grey.</summary>
         internal static Color Muted(Color c, float toGrey)
