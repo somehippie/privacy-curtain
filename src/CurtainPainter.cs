@@ -1176,12 +1176,14 @@ namespace ClaudeCurtain
             GeoBox c = l.MapCrop;
             List<MapAlert> alerts = new List<MapAlert>(l.MapData.Alerts);
             alerts.Sort((x, y) => x.Level.CompareTo(y.Level));
-            float lw = Math.Max(1.2f, l.Unit / 95f);
+            float lw = Math.Max(1f, l.Unit / 130f);
             foreach (MapAlert a in alerts)
             {
-                Color col = a.Level >= 2 ? Wrong : Warn;
-                using (SolidBrush wash = new SolidBrush(Color.FromArgb(a.Level >= 2 ? 16 : 10, col)))
-                using (Pen pen = new Pen(Color.FromArgb(170, col), lw) { LineJoin = LineJoin.Round })
+                // muted (2026-11-21, the user: "less saturated/vivid ... even if it's only a slight change in
+                // shade"): the colour half way to its own grey, a faint outline and the slightest wash
+                Color col = Muted(a.Level >= 2 ? Wrong : Warn, AlertMute);
+                using (SolidBrush wash = new SolidBrush(Color.FromArgb(a.Level >= 2 ? 11 : 8, col)))
+                using (Pen pen = new Pen(Color.FromArgb(a.Level >= 2 ? 105 : 85, col), lw) { LineJoin = LineJoin.Round })
                 {
                     foreach (PointF[] ring in a.Rings)
                     {
@@ -1193,6 +1195,16 @@ namespace ClaudeCurtain
                     }
                 }
             }
+        }
+
+        public const float AlertMute = 0.5f;   // how far the alert areas' colours go toward grey
+
+        /// <summary>A colour moved toward the grey of its own lightness: 0 keeps it, 1 is grey.</summary>
+        internal static Color Muted(Color c, float toGrey)
+        {
+            float grey = 0.299f * c.R + 0.587f * c.G + 0.114f * c.B;
+            Func<int, int> mix = v => (int)Math.Round(v + (grey - v) * toGrey);
+            return Color.FromArgb(c.A, mix(c.R), mix(c.G), mix(c.B));
         }
 
         /// <summary>Earthquakes of the last three days on the map: a ring sized by magnitude, fading with age; from M3.5 its magnitude.</summary>
