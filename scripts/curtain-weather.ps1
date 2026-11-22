@@ -557,10 +557,13 @@ function Update-Detail([double]$CLat, [double]$CLon) {
                     default     { Get-RoadsUrl $dBox $w $h }
                 }
                 Save-MapImage $url $path 90
-                Get-ChildItem -Path $LocalDir -Filter "map-detail-$dk-*.png" | Where-Object { $_.Name -ne $name } | Remove-Item -Force -ErrorAction SilentlyContinue
             } catch { Write-Host "Close-up $dk skipped: $($_.Exception.Message)" }
         }
-        if (Test-Path $path) { $lines.Add("detail $dk $name") }
+        if (Test-Path $path) {
+            $lines.Add("detail $dk $name")
+            # the same part cut for another box (a new place, or the close-up's earlier shape) is never used again
+            Get-ChildItem -Path $LocalDir -Filter "map-detail-$dk-*.png" | Where-Object { $_.Name -ne $name } | Remove-Item -Force -ErrorAction SilentlyContinue
+        }
     }
     if (-not ($lines | Where-Object { $_ -like 'detail base *' })) { return @() }   # no ground, no close-up
     try { $lines.Add('detail ' + (Update-Dem $dBox $detailDemZoom)) } catch { Write-Host "Close-up elevation skipped: $($_.Exception.Message)" }
