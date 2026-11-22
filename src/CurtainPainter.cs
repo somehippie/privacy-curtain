@@ -598,6 +598,7 @@ namespace ClaudeCurtain
                     float head;
                     float need = RightColumn(null, m, s, fData, fLabel, fSmall, track, unit, st, 0, 0, 0, 0, 0, out head);
                     L.HasRight = need > 0;
+                    float lift = 0;
                     if (hasMap && landscape && L.HasRight)
                     {
                         // If the clock leaves the map's header above where the forecast falls by itself (under the
@@ -609,8 +610,15 @@ namespace ClaudeCurtain
                             mapRule = (float)Math.Round(mapHead + st(6) * 0.8f);
                             mapTop = (float)Math.Round(mapRule + st(5.5));
                         }
+                        // With the close-up under it (2026-11-21, the user: less room between the map and the clock,
+                        // for a bigger close-up and more even spacing), the map's block (header, rule, map) rises
+                        // from a φ³ step under the date to a φ⁴ step, keeping its size, and the close-up takes the
+                        // height it leaves; the forecast's header rises with it (it falls a φ⁴ step under the system
+                        // table by itself), so the two headers stay on one line.
+                        if (s.Map.Detail != null)
+                            lift = Math.Max(0f, (float)Math.Floor(Math.Min(st(3) - st(4), mapHead - head)));
                     }
-                    float forecastAt = hasMap && landscape ? mapHead : 0;
+                    float forecastAt = hasMap && landscape ? mapHead - lift : 0;
                     // the message's last baseline, laid out naturally
                     float lastLine = hasMap ? mapTop + mapMinH + st(3) + msgH : yDate + st(3) + pinH + st(3) + msgH;
                     float stretch = 0;
@@ -635,7 +643,7 @@ namespace ClaudeCurtain
                     float ruleTop = (float)Math.Round(lastLine - msgH);
                     L.Rule = new RectangleF(0, ruleTop, ruleW, ruleH);
                     L.PinX = 0;
-                    L.PinHintBaseline = ruleTop - st(3);
+                    L.PinHintBaseline = ruleTop - st(3) - lift;   // in the map's lowest band, wherever the map sits
                     L.PinDotsY = L.PinHintBaseline - fLabel.CapHeight - st(5) - dotRow / 2f;
                     if (hasMap)
                     {
@@ -649,9 +657,9 @@ namespace ClaudeCurtain
                             float room = (float)Math.Floor((maxW - st(2) - 2 * (float)Math.Ceiling(unit * 0.25f)) / Phi);
                             leftW = Math.Max(leftW, Math.Min((float)Math.Round(mapH * Phi), room));
                         }
-                        L.Map = new RectangleF(0, mapTop, (float)Math.Round(leftW), mapH);
-                        L.MapHeadBaseline = mapHead;
-                        L.MapRuleY = mapRule;
+                        L.Map = new RectangleF(0, mapTop - lift, (float)Math.Round(leftW), mapH);
+                        L.MapHeadBaseline = mapHead - lift;
+                        L.MapRuleY = mapRule - lift;
                         AddMap(ops, m, s, L, fLabel, track, unit);
 
                         // The close-up (2026-11-21): in the room the message leaves beside it under the map, from
@@ -660,7 +668,7 @@ namespace ClaudeCurtain
                         {
                             float msgRight = Math.Max(Measure(m, title, fTitle.Font, 0) - InkLeft(title, fTitle),
                                                       Math.Max(Measure(m, l1, fSmall.Font, 0), Measure(m, l2, fSmall.Font, 0)));
-                            float dx = (float)Math.Round(msgRight + st(4)), dy = (float)Math.Round(mapBottom + st(5));
+                            float dx = (float)Math.Round(msgRight + st(4)), dy = (float)Math.Round(mapBottom - lift + st(5));
                             RectangleF d = new RectangleF(dx, dy, L.Map.Right - dx, (float)Math.Round(lastLine) - dy);
                             if (d.Width >= unit * 2 && d.Height >= unit * 0.9f)
                             {
@@ -1607,7 +1615,7 @@ namespace ClaudeCurtain
             bool haveDays = raw.Count > 0, haveHours = s.Hourly != null && s.Hourly.Length > 0;
             if (haveDays || haveHours)
             {
-                if (rows.Count > 0) y += st(3.5);   // st(3) until 2026-11-17
+                if (rows.Count > 0) y += st(4);   // st(3) until 2026-11-17, then st(3.5); st(4) since 2026-11-21, so the map's block can rise
                 string head = "FORECAST" + (place != null ? "   ·   " + place.ToUpperInvariant() : "");
                 string side = asOf != null ? "AS OF " + asOf.ToUpperInvariant() : "";
                 float headW = Measure(m, head, fLabel.Font, track) + gx + Measure(m, "AS OF 12:59 PM", fLabel.Font, track);

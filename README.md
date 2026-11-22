@@ -384,7 +384,10 @@ And in the left column:
   domain; local streets a faint weave, state routes and freeways a step lighter and drawn over water
   too, so bridges show) and zoom-13 elevation (about 15 m; at this scale the relief's exaggeration
   eases and contours come every 50 m). No label, alerts or stations: the ground, the weather and
-  home. The ground is kept between refreshes while its files are unchanged.
+  home. The ground is kept between refreshes while its files are unchanged. With the close-up shown,
+  the map's block (header, rule, map) sits a φ⁴ step under the date instead of φ³, keeping its size,
+  and the close-up takes the height that frees; the data column's first gap is φ⁴ too, so the
+  forecast's header rises with the map's and the two stay on one line.
 
   Under the weather, the **relief**: the land's shape from AWS Terrain Tiles (in the United States, USGS
   3DEP elevation; about 120 m a cell at zoom 10, about 70 tiles, 7 MB, fetched once per place), sampled
