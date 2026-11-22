@@ -321,13 +321,63 @@ function Get-MapUrl([string]$Service, [string]$Layer, [double[]]$Box, [int]$Widt
     return $url
 }
 
+# Marsh: the hydrography's swamps and marshes and its inundation areas (seasonal wetlands, flood basins), as a
+# mask on the same grid; the curtain draws it as rows of short dashes, like a topographic print.
+function Get-MarshUrl([double[]]$Box, [int]$Width, [int]$Height) {
+    $fill = '{"type":"simple","symbol":{"type":"esriSFS","style":"esriSFSSolid","color":[0,255,0,255],"outline":{"type":"esriSLS","style":"esriSLSNull","color":[0,0,0,0],"width":0}}}'
+    $layers = '[{"id":10,"source":{"type":"mapLayer","mapLayerId":10},"definitionExpression":"FTYPE = ''SwampMarsh''","drawingInfo":{"renderer":' + $fill +
+              ',"showLabels":false},"minScale":0,"maxScale":0},{"id":7,"source":{"type":"mapLayer","mapLayerId":7},"definitionExpression":"FTYPE = ''Inundation Area''","drawingInfo":{"renderer":' + $fill +
+              ',"showLabels":false},"minScale":0,"maxScale":0}]'
+    return Get-HydroUrl $Box $Width $Height $layers
+}
+
+# Creeks: the hydrography's streams and ditches from Strahler order 2 up (order 1, every gully, would be a
+# scribble), one pixel wide, the order in the red channel (2, 3, 4 and up), so bigger streams draw stronger,
+# and the green channel full for water that flows all year (perennial streams, canals and ditches) and empty
+# for seasonal creeks (intermittent, ephemeral or not known), which the curtain draws less blue. The year-round
+# layer comes first in the list, so it draws on top where the two meet.
+function Get-StreamsUrl([double[]]$Box, [int]$Width, [int]$Height) {
+    $layer = {
+        param($id, $g, $where)
+        $line = { param($r) '{"type":"esriSLS","style":"esriSLSSolid","color":[' + $r + ',' + $g + ',255,255],"width":1.5}' }
+        $renderer = '{"type":"classBreaks","field":"StreamOrde","minValue":2,"classBreakInfos":[{"classMaxValue":2,"symbol":' + (& $line 85) +
+                    '},{"classMaxValue":3,"symbol":' + (& $line 170) + '},{"classMaxValue":99,"symbol":' + (& $line 255) + '}]}'
+        '{"id":' + $id + ',"source":{"type":"mapLayer","mapLayerId":4},"definitionExpression":"' + $where + ' AND StreamOrde >= 2","drawingInfo":{"renderer":' +
+            $renderer + ',"showLabels":false},"minScale":0,"maxScale":0}'
+    }
+    $yearRound = & $layer 101 255 "(FCODE = 46006 OR FTYPE = 'CanalDitch')"
+    $seasonal = & $layer 102 0 "FTYPE = 'StreamRiver' AND FCODE <> 46006"
+    return Get-HydroUrl $Box $Width $Height ('[' + $yearRound + ',' + $seasonal + ']')
+}
+
+function Get-HydroUrl([double[]]$Box, [int]$Width, [int]$Height, [string]$Layers, [int]$Dpi = 48) {
+    $bbox = (@($Box[1], $Box[0], $Box[3], $Box[2]) | ForEach-Object { $_.ToString('0.###', $inv) }) -join ','   # west,south,east,north
+    return 'https://hydro.nationalmap.gov/arcgis/rest/services/nhd/MapServer/export?bbox=' + $bbox + '&bboxSR=4326&imageSR=4326' +
+           "&size=$Width,$Height&dpi=$Dpi&format=png32&transparent=true&dynamicLayers=" + [uri]::EscapeDataString($Layers) + '&f=image'
+}
+
+# The same water from the high-resolution hydrography (its large-scale layers, where FTYPE is a number):
+# reservoirs the 1:100,000 data lacks (some newer or smaller ones) and a river delta's narrow sloughs in
+# full. The server draws those layers only at close scales, and works out the scale from the picture's dpi,
+# so it is asked at 4 dpi: the same pixels, drawn as if close up (plain fills do not depend on dpi). The
+# curtain adds it to the other water, so each source only ever adds what the other lacks (2026-11-21).
+function Get-WaterFineUrl([double[]]$Box, [int]$Width, [int]$Height) {
+    $fill = '{"type":"simple","symbol":{"type":"esriSFS","style":"esriSFSSolid","color":[0,0,255,255],"outline":{"type":"esriSLS","style":"esriSLSNull","color":[0,0,0,0],"width":0}}}'
+    $area = 'FTYPE IN (460, 312, 445, 336, 398, 461, 537)'   # streams and rivers, bays, sea, canals, locks, submerged streams, braided channels
+    $body = 'FTYPE IN (390, 436, 493) AND AREASQKM >= 0.05'  # lakes and ponds, reservoirs, estuaries
+    $layers = '[{"id":9,"source":{"type":"mapLayer","mapLayerId":9},"definitionExpression":"' + $area + '","drawingInfo":{"renderer":' + $fill +
+              ',"showLabels":false},"minScale":0,"maxScale":0},{"id":12,"source":{"type":"mapLayer","mapLayerId":12},"definitionExpression":"' + $body +
+              '","drawingInfo":{"renderer":' + $fill + ',"showLabels":false},"minScale":0,"maxScale":0}]'
+    return Get-HydroUrl $Box $Width $Height $layers 4
+}
+
 # The USGS hydrography service's export as a water mask: rivers, bays, canals, lakes, reservoirs and estuaries
 # in plain blue, without the outlines and names of its own style and without marsh, at any scale (its small-
 # scale layers would otherwise switch off at this size). Same grid as the land and water map.
 function Get-WaterUrl([double[]]$Box, [int]$Width, [int]$Height) {
     $fill = '{"type":"simple","symbol":{"type":"esriSFS","style":"esriSFSSolid","color":[0,0,255,255],"outline":{"type":"esriSLS","style":"esriSLSNull","color":[0,0,0,0],"width":0}}}'
     $area = "FTYPE IN ('StreamRiver','BayInlet','SeaOcean','CanalDitch','Lock Chamber','Submerged Stream')"
-    $body = "FTYPE IN ('LakePond','Reservoir','Estuary') AND AREASQKM >= 0.2"   # not the specks of small ponds
+    $body = "FTYPE IN ('LakePond','Reservoir','Estuary') AND AREASQKM >= 0.05"   # stock ponds too (0.2 km2 until 2026-11-21), not specks
     $layers = '[{"id":7,"source":{"type":"mapLayer","mapLayerId":7},"definitionExpression":"' + $area + '","drawingInfo":{"renderer":' + $fill +
               ',"showLabels":false},"minScale":0,"maxScale":0},{"id":10,"source":{"type":"mapLayer","mapLayerId":10},"definitionExpression":"' + $body +
               '","drawingInfo":{"renderer":' + $fill + ',"showLabels":false},"minScale":0,"maxScale":0}]'
@@ -519,13 +569,29 @@ function Update-Map {
     }
 
     # Rivers, canals and lakes, once per place, on the same grid; best-effort (without them the map is as before).
-    $waterName = 'map-water-{0}.png' -f (($box | ForEach-Object { $_.ToString('0.0', $inv) }) -join '_')
+    $waterName = 'map-water-v2-{0}.png' -f (($box | ForEach-Object { $_.ToString('0.0', $inv) }) -join '_')   # v2: stock ponds too
     $waterPath = Join-Path $LocalDir $waterName
     if (-not (Test-Path $waterPath)) {
         try {
             Save-MapImage (Get-WaterUrl $box $baseW $baseH) $waterPath 90   # drawn on request, so it can take a while
             Get-ChildItem -Path $LocalDir -Filter 'map-water-*.png' | Where-Object { $_.Name -ne $waterName } | Remove-Item -Force -ErrorAction SilentlyContinue
         } catch { Write-Host "Rivers and lakes skipped: $($_.Exception.Message)" }
+    }
+
+    # Marsh and creeks, once per place, on the same grid; best-effort too.
+    $hydro = @{}
+    foreach ($hk in 'waterfine', 'marsh', 'streams') {
+        $version = if ($hk -eq 'streams') { 'v2-' } else { '' }   # v2: year-round streams in the green channel
+        $name = 'map-{0}-{1}{2}.png' -f $hk, $version, (($box | ForEach-Object { $_.ToString('0.0', $inv) }) -join '_')
+        $path = Join-Path $LocalDir $name
+        if (-not (Test-Path $path)) {
+            try {
+                $url = switch ($hk) { 'waterfine' { Get-WaterFineUrl $box $baseW $baseH } 'marsh' { Get-MarshUrl $box $baseW $baseH } default { Get-StreamsUrl $box $baseW $baseH } }
+                Save-MapImage $url $path 90
+                Get-ChildItem -Path $LocalDir -Filter "map-$hk-*.png" | Where-Object { $_.Name -ne $name } | Remove-Item -Force -ErrorAction SilentlyContinue
+            } catch { Write-Host "Map $hk skipped: $($_.Exception.Message)" }
+        }
+        if (Test-Path $path) { $hydro[$hk] = $name }
     }
 
     # Elevation for the relief, once per place.
@@ -553,6 +619,7 @@ function Update-Map {
     $lines.Add("box $boxText")
     $lines.Add("base $baseName")
     if (Test-Path $waterPath) { $lines.Add("water $waterName") }
+    foreach ($hk in 'waterfine', 'marsh', 'streams') { if ($hydro[$hk]) { $lines.Add("$hk $($hydro[$hk])") } }
     foreach ($l in @($dem) + @($radar) + @($sat) + @($stations) + @($tides)) { if ($l) { $lines.Add($l) } }
     $lines.Add(('credit NOAA  {0}  USGS  {0}  {1} OpenStreetMap' -f [char]0x00B7, [char]0x00A9))
     Write-Atomic $mapFile $lines

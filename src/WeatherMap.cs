@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
 using System.Globalization;
 using System.IO;
@@ -118,6 +119,9 @@ namespace ClaudeCurtain
         public GeoBox Box;
         public int BaseW, BaseH;
         public byte[] Water = new byte[0];        // 0 = land ... 255 = water, over Box
+        public byte[] Marsh = new byte[0];        // 0 ... 255 = marsh, on the base grid (empty = none)
+        public byte[] Streams = new byte[0];      // creeks, 0 ... 255 by size, on the base grid (empty = none)
+        public byte[] YearRound = new byte[0];    // the part of Streams that flows all year, the same way
         public string BaseId = "";
         public MapFrame[] Radar = new MapFrame[0];   // oldest first
         public MapFrame[] Sat = new MapFrame[0];     // oldest first, all one kind
@@ -146,6 +150,9 @@ namespace ClaudeCurtain
             public bool HasBox;
             public string Base;
             public string Water;      // the rivers, canals and lakes, on the base map's grid (optional)
+            public string WaterFine;  // the same water from the high-resolution hydrography, added to it (optional)
+            public string Marsh;      // swamps, marshes and seasonal wetlands, the same way (optional)
+            public string Streams;    // creeks, their size in the red channel, the same way (optional)
             public string Credit = "";
             public readonly List<KeyValuePair<DateTime, string>> Radar = new List<KeyValuePair<DateTime, string>>();
             public readonly List<KeyValuePair<DateTime, string>> Sat = new List<KeyValuePair<DateTime, string>>();
@@ -181,6 +188,15 @@ namespace ClaudeCurtain
                             break;
                         case "water":
                             if (p.Length == 2 && PlainName(p[1])) ix.Water = p[1];
+                            break;
+                        case "waterfine":
+                            if (p.Length == 2 && PlainName(p[1])) ix.WaterFine = p[1];
+                            break;
+                        case "marsh":
+                            if (p.Length == 2 && PlainName(p[1])) ix.Marsh = p[1];
+                            break;
+                        case "streams":
+                            if (p.Length == 2 && PlainName(p[1])) ix.Streams = p[1];
                             break;
                         case "radar":
                             if (p.Length == 3 && Utc(p[1], out t) && PlainName(p[2])) ix.Radar.Add(new KeyValuePair<DateTime, string>(t, p[2]));
@@ -311,6 +327,25 @@ namespace ClaudeCurtain
                 {
                     MergeWater(m.Water, w, h, wpx, ww, wh);
                     m.BaseId += "|" + ix.Water + "@" + File.GetLastWriteTimeUtc(Path.Combine(dir, ix.Water)).Ticks.ToString(CultureInfo.InvariantCulture);
+                }
+                // The high-resolution water (2026-11-21): reservoirs and sloughs the 1:100,000 data lacks, added
+                // the same way, so either source only ever adds water.
+                if (ix.WaterFine != null && ReadPixels(Path.Combine(dir, ix.WaterFine), out wpx, out ww, out wh))
+                {
+                    MergeWater(m.Water, w, h, wpx, ww, wh);
+                    m.BaseId += "|" + ix.WaterFine + "@" + File.GetLastWriteTimeUtc(Path.Combine(dir, ix.WaterFine)).Ticks.ToString(CultureInfo.InvariantCulture);
+                }
+                // Marsh and creeks (2026-11-21): detail on the ground; without them the map is as it was.
+                if (ix.Marsh != null && ReadPixels(Path.Combine(dir, ix.Marsh), out wpx, out ww, out wh))
+                {
+                    m.Marsh = MaskFrom(wpx, ww, wh, w, h, false);
+                    m.BaseId += "|" + ix.Marsh + "@" + File.GetLastWriteTimeUtc(Path.Combine(dir, ix.Marsh)).Ticks.ToString(CultureInfo.InvariantCulture);
+                }
+                if (ix.Streams != null && ReadPixels(Path.Combine(dir, ix.Streams), out wpx, out ww, out wh))
+                {
+                    m.Streams = MaskFrom(wpx, ww, wh, w, h, true);
+                    m.YearRound = YearRoundFrom(wpx, ww, wh, w, h);
+                    m.BaseId += "|" + ix.Streams + "@" + File.GetLastWriteTimeUtc(Path.Combine(dir, ix.Streams)).Ticks.ToString(CultureInfo.InvariantCulture);
                 }
 
                 List<MapFrame> radar = new List<MapFrame>(), sat = new List<MapFrame>();
@@ -606,6 +641,45 @@ namespace ClaudeCurtain
             }
         }
 
+        /// <summary>
+        /// A mask drawn opaque on a transparent ground, read at the base grid's cells: its opacity, and with
+        /// bySize the red channel scales it too (the creeks: 85 for the smallest drawn, 255 for rivers).
+        /// </summary>
+        internal static byte[] MaskFrom(int[] px, int pw, int ph, int w, int h, bool bySize)
+        {
+            byte[] mask = new byte[Math.Max(0, w * h)];
+            if (px == null || w <= 0 || h <= 0 || pw <= 0 || ph <= 0 || px.Length < pw * ph) return mask;
+            for (int y = 0; y < h; y++)
+            {
+                int sy = Math.Min(ph - 1, (int)((y + 0.5) * ph / h));
+                for (int x = 0; x < w; x++)
+                {
+                    int c = px[sy * pw + Math.Min(pw - 1, (int)((x + 0.5) * pw / w))];
+                    int a = (c >> 24) & 255;
+                    if (bySize) a = a * ((c >> 16) & 255) / 255;
+                    mask[y * w + x] = (byte)a;
+                }
+            }
+            return mask;
+        }
+
+        /// <summary>The creeks that flow all year: the creek mask (by size) where the green channel is full.</summary>
+        internal static byte[] YearRoundFrom(int[] px, int pw, int ph, int w, int h)
+        {
+            byte[] all = MaskFrom(px, pw, ph, w, h, true);
+            if (px == null || w <= 0 || h <= 0 || pw <= 0 || ph <= 0 || px.Length < pw * ph) return all;
+            for (int y = 0; y < h; y++)
+            {
+                int sy = Math.Min(ph - 1, (int)((y + 0.5) * ph / h));
+                for (int x = 0; x < w; x++)
+                {
+                    int c = px[sy * pw + Math.Min(pw - 1, (int)((x + 0.5) * pw / w))];
+                    all[y * w + x] = (byte)(all[y * w + x] * ((c >> 8) & 255) / 255);
+                }
+            }
+            return all;
+        }
+
         /// <summary>A satellite picture: grey levels (both kinds come with bright = cloud).</summary>
         internal static byte[] GreyFrom(int[] px)
         {
@@ -889,6 +963,46 @@ namespace ClaudeCurtain
                 }
             }
 
+            // Marsh along the river's mouth and creeks running down to the river and the lake, drawn as the real
+            // masks are, so previews show them too.
+            using (Bitmap mk = new Bitmap(bw, bh, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+            using (Bitmap sk = new Bitmap(bw, bh, System.Drawing.Imaging.PixelFormat.Format32bppArgb))
+            {
+                using (Graphics g = Graphics.FromImage(mk))
+                using (SolidBrush green = new SolidBrush(Color.FromArgb(255, 0, 255, 0)))
+                {
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    g.FillClosedCurve(green, new[] { new PointF(bw * 0.235f, bh * 0.50f), new PointF(bw * 0.30f, bh * 0.49f), new PointF(bw * 0.36f, bh * 0.53f),
+                                                     new PointF(bw * 0.33f, bh * 0.555f), new PointF(bw * 0.26f, bh * 0.545f) });
+                    g.FillClosedCurve(green, new[] { new PointF(bw * 0.24f, bh * 0.63f), new PointF(bw * 0.31f, bh * 0.615f), new PointF(bw * 0.33f, bh * 0.66f),
+                                                     new PointF(bw * 0.27f, bh * 0.69f) });
+                }
+                using (Graphics g = Graphics.FromImage(sk))
+                {
+                    g.SmoothingMode = SmoothingMode.AntiAlias;
+                    float[][] creeks =
+                    {
+                        new[] { 0.40f, 0.18f, 0.43f, 0.30f, 0.41f, 0.42f, 0.44f, 0.54f },   // down to the river from the north
+                        new[] { 0.52f, 0.95f, 0.50f, 0.82f, 0.53f, 0.70f, 0.51f, 0.57f },   // from the hills in the south
+                        new[] { 0.62f, 0.90f, 0.66f, 0.78f, 0.63f, 0.66f, 0.65f, 0.55f },
+                        new[] { 0.80f, 0.05f, 0.76f, 0.12f, 0.73f, 0.20f, 0.70f, 0.24f },   // into the lake
+                        new[] { 0.30f, 0.95f, 0.32f, 0.85f, 0.29f, 0.76f, 0.31f, 0.67f },
+                        new[] { 0.72f, 0.95f, 0.75f, 0.80f, 0.72f, 0.68f, 0.74f, 0.53f },
+                    };
+                    for (int k = 0; k < creeks.Length; k++)
+                    {
+                        float[] c = creeks[k];
+                        PointF[] pts = new PointF[c.Length / 2];
+                        for (int j = 0; j < pts.Length; j++) pts[j] = new PointF(c[2 * j] * bw, c[2 * j + 1] * bh);
+                        using (Pen pen = new Pen(Color.FromArgb(255, k % 3 == 0 ? 255 : 170, k % 3 == 0 ? 255 : 0, 255), 1f))
+                            g.DrawCurve(pen, pts);
+                    }
+                }
+                m.Marsh = MaskFrom(MapArt.GetPixels(mk), bw, bh, bw, bh, false);
+                m.Streams = MaskFrom(MapArt.GetPixels(sk), bw, bh, bw, bh, true);
+                m.YearRound = YearRoundFrom(MapArt.GetPixels(sk), bw, bh, bw, bh);
+            }
+
             // Radar: a band of rain 20-60 km west of home, a broken line of heavier showers on its leading edge
             // and lighter rain behind, moving east-north-east at about 30 km/h, with a few showers ahead of it.
             int rw = 300, rh = 120;
@@ -1044,8 +1158,8 @@ namespace ClaudeCurtain
     /// </summary>
     internal static class MapArt
     {
-        internal static readonly Color WaterTone = Color.FromArgb(22, 21, 20);
-        internal static readonly Color ShoreTone = Color.FromArgb(92, 89, 84);
+        internal static readonly Color WaterTone = Color.FromArgb(13, 21, 32);    // a deep navy (a warm 22, 21, 20 until 2026-11-21)
+        internal static readonly Color ShoreTone = Color.FromArgb(78, 92, 108);   // a cool slate (a warm 92, 89, 84 until 2026-11-21)
         internal static readonly Color CloudTone = Color.FromArgb(200, 196, 188);   // at most ~Secondary on screen: the clock stays the brightest thing
         internal static readonly Color RainQuiet = Color.FromArgb(74, 104, 130);
         internal static readonly Color RainBright = Color.FromArgb(146, 178, 204);
@@ -1209,8 +1323,14 @@ namespace ClaudeCurtain
         /// </summary>
         private static void RenderBase(WeatherMap m, GeoBox crop, int w, int h, out Bitmap ground, out Bitmap shore)
         {
-            // Coverage of water per screen pixel, from four samples (the source is finer than the screen).
+            // Coverage of water per screen pixel, from four samples (the source is finer than the screen); marsh
+            // the same way, and creeks from the strongest of the four, so a line a pixel wide stays unbroken.
             float[] cov = new float[w * h];
+            bool hasMarsh = m.Marsh != null && m.Marsh.Length == m.BaseW * m.BaseH && m.Marsh.Length > 0;
+            bool hasStreams = m.Streams != null && m.Streams.Length == m.BaseW * m.BaseH && m.Streams.Length > 0;
+            float[] marsh = hasMarsh ? new float[w * h] : null, creek = hasStreams ? new float[w * h] : null;
+            bool hasYearRound = hasStreams && m.YearRound != null && m.YearRound.Length == m.Streams.Length;
+            float[] yearRound = hasYearRound ? new float[w * h] : null;
             float[] ax, ay, bx, by;
             Mapping(m.Box, crop, w, h, m.BaseW, m.BaseH, 0.25f, out ax, out ay);
             Mapping(m.Box, crop, w, h, m.BaseW, m.BaseH, 0.75f, out bx, out by);
@@ -1221,6 +1341,15 @@ namespace ClaudeCurtain
                     float s = Bilinear(m.Water, m.BaseW, m.BaseH, ax[x], ay[y]) + Bilinear(m.Water, m.BaseW, m.BaseH, bx[x], ay[y]) +
                               Bilinear(m.Water, m.BaseW, m.BaseH, ax[x], by[y]) + Bilinear(m.Water, m.BaseW, m.BaseH, bx[x], by[y]);
                     cov[y * w + x] = s / (4 * 255f);
+                    if (hasMarsh)
+                        marsh[y * w + x] = (Bilinear(m.Marsh, m.BaseW, m.BaseH, ax[x], ay[y]) + Bilinear(m.Marsh, m.BaseW, m.BaseH, bx[x], ay[y]) +
+                                            Bilinear(m.Marsh, m.BaseW, m.BaseH, ax[x], by[y]) + Bilinear(m.Marsh, m.BaseW, m.BaseH, bx[x], by[y])) / (4 * 255f);
+                    if (hasStreams)
+                        creek[y * w + x] = Math.Max(Math.Max(Bilinear(m.Streams, m.BaseW, m.BaseH, ax[x], ay[y]), Bilinear(m.Streams, m.BaseW, m.BaseH, bx[x], ay[y])),
+                                                    Math.Max(Bilinear(m.Streams, m.BaseW, m.BaseH, ax[x], by[y]), Bilinear(m.Streams, m.BaseW, m.BaseH, bx[x], by[y]))) / 255f;
+                    if (hasYearRound)
+                        yearRound[y * w + x] = Math.Max(Math.Max(Bilinear(m.YearRound, m.BaseW, m.BaseH, ax[x], ay[y]), Bilinear(m.YearRound, m.BaseW, m.BaseH, bx[x], ay[y])),
+                                                        Math.Max(Bilinear(m.YearRound, m.BaseW, m.BaseH, ax[x], by[y]), Bilinear(m.YearRound, m.BaseW, m.BaseH, bx[x], by[y]))) / 255f;
                 }
             }
             float[] elev = null;
@@ -1290,6 +1419,29 @@ namespace ClaudeCurtain
                         }
                         r *= land; g *= land; b *= land;
                     }
+                    // Marsh: the ground a step toward the water's tone, with rows of short dashes, as on a
+                    // topographic print; creeks a fine light line, stronger for bigger streams (2026-11-21).
+                    if (hasMarsh && marsh[i] > 0.02f && land > 0.01f)
+                    {
+                        float a = Math.Min(1f, marsh[i]) * land;
+                        r += (WaterTone.R - r) * 0.6f * a; g += (WaterTone.G - g) * 0.6f * a; b += (WaterTone.B - b) * 0.6f * a;
+                        if (MarshDash(x, y))
+                        {
+                            float d = MarshStrength * a;
+                            r += (MarshTone.R - r) * d; g += (MarshTone.G - g) * d; b += (MarshTone.B - b) * d;
+                        }
+                    }
+                    if (hasStreams && creek[i] > 0.02f && land > 0.01f)
+                    {
+                        // how much of the line flows all year: a clear blue, drawn stronger; seasonal creeks a dim
+                        // grey-blue (2026-11-21)
+                        float f = hasYearRound ? Math.Min(1f, yearRound[i] / creek[i]) : 0f;
+                        float a = Math.Min(1f, creek[i]) * (SeasonalStrength + (YearRoundStrength - SeasonalStrength) * f) * land;
+                        float tr = SeasonalTone.R + (YearRoundTone.R - SeasonalTone.R) * f;
+                        float tg = SeasonalTone.G + (YearRoundTone.G - SeasonalTone.G) * f;
+                        float tb = SeasonalTone.B + (YearRoundTone.B - SeasonalTone.B) * f;
+                        r += (tr - r) * a; g += (tg - g) * a; b += (tb - b) * a;
+                    }
                     float c = cov[i];
                     r += WaterTone.R * c; g += WaterTone.G * c; b += WaterTone.B * c;
                     gp[i] = unchecked((int)0xFF000000) | (Byte(r) << 16) | (Byte(g) << 8) | Byte(b);
@@ -1303,6 +1455,22 @@ namespace ClaudeCurtain
             ground = FromPixels(gp, w, h);
             shore = FromPixels(sp, w, h);
         }
+
+        /// <summary>The marsh pattern: rows of dashes four pixels long, every fourth row, each row staggered.</summary>
+        internal static bool MarshDash(int x, int y)
+        {
+            return y % 4 == 2 && (x + (y / 4 % 2) * 4) % 8 < 4;
+        }
+
+        // The water family (2026-11-21, at the user's request for blue year-round waterways): open water a deep
+        // navy, the shoreline a cool slate, marsh dashes between the two, creeks that flow all year a clear blue
+        // and seasonal ones a dim grey-blue. All darker or greyer than the rain, which stays the brightest blue.
+        public const float MarshStrength = 0.75f;
+        public const float YearRoundStrength = 0.9f;
+        public const float SeasonalStrength = 0.5f;
+        internal static readonly Color MarshTone = Color.FromArgb(76, 96, 116);
+        internal static readonly Color YearRoundTone = Color.FromArgb(72, 118, 164);
+        internal static readonly Color SeasonalTone = Color.FromArgb(86, 100, 112);
 
         public const double ReliefSunDegrees = 40;     // the light's height
         public const double ReliefExaggeration = 2.4;  // at this scale real hills look flat

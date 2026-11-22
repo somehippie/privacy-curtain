@@ -160,7 +160,7 @@ them together stay under about 1.8 MB, and the weather map's files under another
 | `curtain.log` (diagnostics) | 512 KB, trimmed to the newest 128 KB | weeks |
 | `alerts.log` | 256 KB, trimmed to the newest 160 KB | thousands of alerts |
 | `last-summary.txt`, `last-summary-timeline.txt`, `last-exit.json`, `weather.txt`, `weather-hourly.txt` | one small file each, overwritten (the timeline holds at most 5,000 moments, about 60 KB) | the last run only |
-| `map.txt`, `map-base-*.png`, `map-water-*.png`, `radar-*.png`, `sat-*.jpg` (the weather map) | the last hour of pictures (about 8 radar, 7 satellite), one land and water map and one of rivers and lakes; older pictures are deleted at each refresh | the last hour |
+| `map.txt`, `map-base-*.png`, `map-water-*.png`, `map-waterfine-*.png`, `map-marsh-*.png`, `map-streams-*.png`, `radar-*.png`, `sat-*.jpg` (the weather map) | the last hour of pictures (about 8 radar, 7 satellite), one land and water map and one of rivers and lakes; older pictures are deleted at each refresh | the last hour |
 | `dem-*.png`, `tide-station.txt` (the map's relief and tide) | the elevation tiles over the map's area (about 7 MB) and one line naming the tide station, fetched once per place; tiles for another place are deleted | as long as the place stays the same |
 | `test\report-*.txt` | the 10 newest are kept | the last 10 test runs |
 
@@ -233,14 +233,19 @@ about what it is doing. Everything on it comes from one proportional system buil
   135 km top to bottom, as a golden rectangle where the screen has room for one, with home as a small
   accent-coloured dot on the golden section across and 7/10 of the way down, so the larger parts of the
   map lie to the west, where weather usually comes from, and to the north. It is drawn
-  in the curtain's own palette rather than the services' colours: water a shade lighter than the black
-  land, the shoreline a fine line drawn over the weather so the coast stays readable under fog, rain in
+  in the curtain's own palette rather than the services' colours: water a deep navy, the shoreline a fine
+  cool slate line drawn over the weather so the coast stays readable under fog, rain in
   the data hue from quiet to bright as it gets heavier (amber when heavy, coral when severe, with a
   five-step legend), clouds and fog in warm white, never brighter than the body text, so the clock stays
   the brightest thing on screen. Under the weather the land's relief stays ground rather than picture: lit
   slopes, a faint warm tint on high ground and hairline contours every 100 m, with a stronger one every
   500 m, like a topographic print. The water includes the rivers, canals, lakes and reservoirs, not only
-  the coast.
+  the coast. Marshes and seasonal wetlands are drawn as on a topographic print, the ground a step toward the
+  water's tone with rows of short staggered dashes, and the creeks (from stream order 2 up; order 1, every
+  gully, would be a scribble) as fine lines, stronger for bigger streams, so they never read as contours: a
+  clear blue where they flow all year (perennial streams, canals and ditches) and a dim grey-blue where they
+  are seasonal (intermittent or ephemeral), with the marsh dashes a blue slate between the two, so bay,
+  delta, marsh and creeks read as one family of water, all darker or greyer than the rain.
   Over it, a few labels with a dark halo: station temperatures spread across the map, and wind only where
   it is notable. The tide has a small table in one of the top corners, set a half step under the map's
   other labels so it hides little of the map, with what a fisherman or a surfer looks for:
@@ -349,7 +354,13 @@ And in the left column:
   from NASA GIBS's map made from OpenStreetMap, fetched once (map data © OpenStreetMap contributors),
   with the rivers, canals, lakes, reservoirs and estuaries of the USGS National Hydrography Dataset added,
   from its map service, fetched once per place: a request for the same rounded box, drawn as plain fill
-  without the service's outlines, names, marsh or ponds under 0.2 km². It covers the United States.
+  without the service's outlines, names or ponds under 0.05 km². Its swamps, marshes and inundation areas,
+  and its streams and ditches from Strahler order 2 up, come the same way, as two more masks on the same
+  grid (`map-marsh-*.png`, `map-streams-*.png`; the stream order in the red channel, year-round flow in the green).
+  The 1:100,000 data lacks some reservoirs, so the water also comes from the high-resolution hydrography
+  (`map-waterfine-*.png`; its large-scale layers, asked at 4 dpi so the server draws them for a picture this
+  wide), added to the rest, so either source only ever adds water. It covers the United
+  States.
 
   Under the weather, the **relief**: the land's shape from AWS Terrain Tiles (in the United States, USGS
   3DEP elevation; about 120 m a cell at zoom 10, about 70 tiles, 7 MB, fetched once per place), sampled
@@ -433,7 +444,7 @@ Please read these before relying on the curtain.
 ```
 
 They use a throwaway PIN in `local\test` and never touch the real one, and they never call your notify
-hook. The self-tests (~140 checks, including PIN hashing/entry rules, which key presses belong to your own
+hook. The self-tests (~146 checks, including PIN hashing/entry rules, which key presses belong to your own
 unlock, the time-zone label, the stats sampler, weather-file reading, and the design: every state rendered
 at 720p, 1080p, 16:10, 1440p, ultrawide and portrait, fitting the screen, the columns exactly φ : 1, the
 forecast's header on the map's line,

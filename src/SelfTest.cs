@@ -947,6 +947,23 @@ namespace ClaudeCurtain
                       water[0] == 0 && water[1] == 255 && water[2] == 255 && water[3] == 255 && water[4] == 128 && water[5] == 0);
             }
 
+            // Marsh and creeks: named in map.txt, read as masks (creeks scaled by their size), drawn into the ground.
+            {
+                WeatherMap.Index hx = WeatherMap.Index.Parse(new[] { "box 44.4 -123.5 45.6 -120.5", "base b.png", "waterfine f.png", "marsh m.png", "streams s.png" });
+                WeatherMap.Index hbad = WeatherMap.Index.Parse(new[] { "box 44.4 -123.5 45.6 -120.5", "base b.png", "marsh ..\\m.png", "streams a b" });
+                int clear = 0, green = unchecked((int)0xFF00FF00), big = unchecked((int)0xFFFF00FF), small = unchecked((int)0xFF5500FF), soft = unchecked((int)0x80FF00FF);
+                byte[] mm = WeatherMap.MaskFrom(new[] { clear, green, clear, green }, 2, 2, 2, 2, false);
+                byte[] sm = WeatherMap.MaskFrom(new[] { clear, big, small, soft }, 2, 2, 2, 2, true);
+                Check("map: the high-resolution water, marsh and creeks are named in map.txt and read as masks, creeks weighed by their size (river, small creek, soft edge)",
+                      hx.WaterFine == "f.png" && hx.Marsh == "m.png" && hx.Streams == "s.png" && hbad.Marsh == null && hbad.Streams == null &&
+                      mm[0] == 0 && mm[1] == 255 && mm[3] == 255 && sm[0] == 0 && sm[1] == 255 && sm[2] == 85 && sm[3] == 128);
+                int yr = unchecked((int)0xFFFFFFFF), seasonal = unchecked((int)0xFFAA00FF);   // a year-round river; a seasonal creek
+                byte[] ym = WeatherMap.YearRoundFrom(new[] { yr, seasonal }, 2, 1, 2, 1);
+                Check("map: creeks that flow all year are told from seasonal ones (the green channel)", ym[0] == 255 && ym[1] == 0);
+                Check("map: the marsh pattern is rows of short staggered dashes",
+                      MapArt.MarshDash(0, 2) && !MapArt.MarshDash(0, 3) && !MapArt.MarshDash(4, 2) && MapArt.MarshDash(4, 6) && !MapArt.MarshDash(0, 6));
+            }
+
             // Elevation: terrarium pixels to metres, tiles found and stitched in the right places.
             {
                 float[] e = WeatherMap.Terrarium(new[] { unchecked((int)0xFF800000), unchecked((int)0xFF812C00), unchecked((int)0xFF7FFF80) });
@@ -1052,6 +1069,31 @@ namespace ClaudeCurtain
                 for (int i = 0; i < withRelief.Length; i++) if (withRelief[i] != without[i]) differ++;
                 lines.Add("INFO  relief changes " + (100 * differ / withRelief.Length) + "% of the sample map's pixels");
                 Check("relief: hills and contours are drawn into the map's ground", differ > withRelief.Length / 10);
+
+                WeatherMap bare = new WeatherMap { Box = relief.Box, BaseW = relief.BaseW, BaseH = relief.BaseH, Water = relief.Water,
+                                                   Elevation = relief.Elevation, DemW = relief.DemW, DemH = relief.DemH, DemId = relief.DemId, BaseId = "selftest-bare" };
+                int[] bareGround = MapArt.GetPixels(MapArt.Base(bare, c, 600, 300));
+                int marshPx = 0, creekPx = 0;
+                for (int i = 0; i < withRelief.Length; i++) if (withRelief[i] != bareGround[i]) { if (MapArt.MarshDash(i % 600, i / 600)) marshPx++; else creekPx++; }
+                lines.Add("INFO  marsh dashes on " + marshPx + " pixels, creeks and marsh ground on " + creekPx);
+                Check("map: the sample's marsh and creeks are drawn into the ground", relief.Marsh.Length > 0 && relief.Streams.Length > 0 && marshPx > 50 && creekPx > 500);
+                // The same map with every creek seasonal: the year-round ones must be what makes it bluer.
+                WeatherMap allSeasonal = new WeatherMap { Box = relief.Box, BaseW = relief.BaseW, BaseH = relief.BaseH, Water = relief.Water,
+                                                          Marsh = relief.Marsh, Streams = relief.Streams, Elevation = relief.Elevation,
+                                                          DemW = relief.DemW, DemH = relief.DemH, DemId = relief.DemId, BaseId = "selftest-seasonal" };
+                int[] seasonalGround = MapArt.GetPixels(MapArt.Base(allSeasonal, c, 600, 300));
+                int bluer = 0, seasonalBlue = 0;
+                for (int i = 0; i < withRelief.Length; i++)
+                {
+                    int p = withRelief[i], q = seasonalGround[i], z = bareGround[i];
+                    if ((p & 255) - ((p >> 16) & 255) > (q & 255) - ((q >> 16) & 255) + 6) bluer++;
+                    if (q != z && (q & 255) - ((q >> 16) & 255) > 4) seasonalBlue++;
+                }
+                lines.Add("INFO  year-round creeks make " + bluer + " pixels bluer; seasonal creeks and marsh tint " + seasonalBlue);
+                Check("map: year-round creeks are drawn a clearer blue than seasonal ones, which are a dim grey-blue", bluer > 100 && seasonalBlue > 500);
+                Check("map: open water is a deep navy, darker and greyer than the faintest rain",
+                      MapArt.WaterTone.B > MapArt.WaterTone.R && MapArt.WaterTone.B < MapArt.RainQuiet.B / 2 &&
+                      MapArt.YearRoundTone.B - MapArt.YearRoundTone.R > MapArt.SeasonalTone.B - MapArt.SeasonalTone.R);
             }
         }
 
