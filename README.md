@@ -4,7 +4,7 @@ A black screen that covers every monitor and blocks the physical keyboard and mo
 (injected) clicks, typing and screenshots keep working underneath. It's for hiding an automated session on
 a machine you share a room with, without taking the machine away from yourself.
 
-![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone; a radar map of the San Francisco Bay Area below it, its hills shaded and contoured and no rain on it, with temperatures around the Bay, a tide table in one corner and the weather alerts in the other; under the map the message "PC in use by Claude" beside a close-up of the town's streets; and a data column with ten-minute CPU and network sparklines, memory and disk bars, then the forecast: the conditions now as small symbols (humidity, dew point, wind, sunrise and sunset), the next six hours as a temperature curve over rain-chance bars, and three days as small temperature and wind graphs](docs/curtain.png)
+![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone, and beside it the track now playing (a sample one) with its progress line; a radar map of the San Francisco Bay Area below it, its hills shaded and contoured and no rain on it, with temperatures around the Bay, a tide table in one corner and the weather alerts in the other; under the map the message "PC in use by Claude" beside a close-up of the town's streets; and a data column with ten-minute CPU and network sparklines, memory and disk bars, then the forecast: the conditions now as small symbols (humidity, dew point, wind, sunrise and sunset), the next six hours as a temperature curve over rain-chance bars, and three days as small temperature and wind graphs](docs/curtain.png)
 
 Awareness, not lockout: it counts and logs every blocked key press, click and escape attempt, can ping your
 phone while someone is at the keyboard, and shows a "While you were away" summary when you unlock. The
@@ -290,12 +290,13 @@ preview mode:
 .\bin\ClaudeCurtain.exe --render-drift "$env:TEMP\drift.png"
 ```
 
-`--test-state` is one of idle, typing, wrong, shake, cooldown, admin, bright, night, summary, launch, or radar or
-clouds to force the map's mode; `--preview-seconds N` shows the drift position N seconds in. With
+`--test-state` is one of idle, typing, wrong, shake, cooldown, admin, bright, night, summary, launch, radar or
+clouds to force the map's mode, or music, paused or music-long for a sample track; several combine with commas
+(`radar,music`). `--preview-seconds N` shows the drift position N seconds in. With
 `--local-dir` pointing at a folder that has a `map.txt`, the preview uses that real map, at the real time
 and with the real hourly forecast; otherwise it draws a made-up sample place (a coast, a river and a lake),
 which is what the images here show, all but the first: that one is a real map of the Bay Area, rendered
-with `--hide-home`. To share a picture of your own map, add `--hide-home`: it leaves the
+with `--hide-home` and `--test-state radar,music` (so the track is the sample one). To share a picture of your own map, add `--hide-home`: it leaves the
 home dot off and centres the map on your place rounded to a tenth of a degree, not on the place itself.
 
 ## On-screen info
@@ -345,7 +346,8 @@ And in the left column:
   title too long to fit drops trailing extras first ("(feat. ...)", "[Live]", "- Remastered 2011"), then
   ends in an ellipsis. Nothing shows when nothing plays, when a track has been paused for 15 minutes, or on
   a portrait screen, where the clock leaves no room beside it. Previews show the real track (not with
-  `--hide-home`), or a sample one with `--test-state music`, `paused` or `music-long`.
+  `--hide-home`), or a sample one with `--test-state music`, `paused` or `music-long`, which combine with
+  the map's mode (`--test-state radar,music`).
 - **The weather map.** Radar when rain is near, clouds and fog otherwise. *Radar* shows when the next three
   hours of the hourly forecast have a 30% chance of rain or more, or rain, showers, storms or snow in their
   words, or when the radar shows at least light rain (20 dBZ) within 50 km. The source is NOAA's MRMS

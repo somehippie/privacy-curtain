@@ -1266,6 +1266,9 @@ namespace ClaudeCurtain
                 CurtainPainter.Layout hl = CurtainPainter.Compose(shared, 2560, 1440);
                 Check("preview --hide-home: home is left off the map", shared.HideHome && float.IsNaN(hl.MapHome.X));
                 hl.Dispose();
+                DisplayState both = CurtainPreview.Sample(new Options { LocalDir = po.LocalDir, PreviewHideHome = true, TestState = "typing,radar,music" });
+                Check("preview: states combine (typing,radar,music: the PIN typed, the map in radar, the sample track)",
+                      both.PinState == PinGate.StateTyping && both.MapMode == 1 && both.Media != null && both.Media.Playing);
 
                 WeatherMap relief = s.Map;
                 WeatherMap flat = new WeatherMap { Box = relief.Box, BaseW = relief.BaseW, BaseH = relief.BaseH, Water = relief.Water, BaseId = "selftest-flat" };

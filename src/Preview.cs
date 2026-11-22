@@ -18,6 +18,8 @@ namespace ClaudeCurtain
     ///
     ///   --test-state idle|typing|wrong|shake|cooldown|admin|bright|night   which moment to show;
     ///                       radar|clouds   the map in that mode whatever the weather says;
+    ///                       music|paused|music-long   a sample track beside the clock;
+    ///                       several combine with commas ("radar,music");
     ///                       summary|launch   instead, the "While you were away" window or the launcher's dialog
     ///   --hide-home         leave home off the map, for a picture to share
     ///   --overlay           draw the construction on top: the φ : 1 columns, the golden-section margins
@@ -91,31 +93,43 @@ namespace ClaudeCurtain
             }
         }
 
-        /// <summary>Plays a short scripted timeline so animated states are shown at a real moment.</summary>
+        /// <summary>
+        /// Plays a short scripted timeline so animated states are shown at a real moment. Of combined states
+        /// ("typing,radar"), the PIN's moment plays out and the rest hold through each step of it.
+        /// </summary>
         internal static void Render(CurtainPainter p, Graphics g, Options o, int w, int h)
         {
-            string state = (o.TestState ?? "idle").ToLowerInvariant();
+            string state = (o.TestState ?? "idle").ToLowerInvariant(), held = "";
+            foreach (string t in state.Split(','))
+                if (t != "typing" && t != "wrong" && t != "shake" && t != "cooldown") held += "," + t;
+            bool typing = Has(state, "typing"), wrong = Has(state, "wrong"), shake = Has(state, "shake");
             p.FixedNowMs = 0;
             p.Paint(g, Sample(o, "idle"), w, h);   // the first frame starts the fade-in
             long final = 4000;
-            if (state == "typing" || state == "wrong" || state == "shake")
+            if (typing || wrong || shake)
             {
                 p.FixedNowMs = 2000;
-                p.Paint(g, Sample(o, "typing"), w, h);
+                p.Paint(g, Sample(o, "typing" + held), w, h);
             }
-            if (state == "wrong" || state == "shake")
+            if (wrong || shake)
             {
                 p.FixedNowMs = 3000;
-                p.Paint(g, Sample(o, "wrong"), w, h);
-                if (state == "shake") final = 3070;
+                p.Paint(g, Sample(o, "wrong" + held), w, h);
+                if (shake) final = 3070;
             }
-            if (state == "cooldown")
+            if (Has(state, "cooldown"))
             {
                 p.FixedNowMs = 3000;
-                p.Paint(g, Sample(o, "cooldown"), w, h);
+                p.Paint(g, Sample(o, "cooldown" + held), w, h);
             }
             p.FixedNowMs = final;
-            p.Paint(g, Sample(o, state == "shake" ? "wrong" : state), w, h);
+            p.Paint(g, Sample(o, state), w, h);   // "shake" is painted as "wrong", a moment after it
+        }
+
+        /// <summary>Whether a state, or one of several comma-separated, is this one.</summary>
+        private static bool Has(string state, string one)
+        {
+            return Array.IndexOf(state.Split(','), one) >= 0;
         }
 
         internal static DisplayState Sample(Options o)
@@ -202,28 +216,29 @@ namespace ClaudeCurtain
             s.Weather = lines;
 
             if (real != null && !o.PreviewHideHome) s.Media = NowPlaying.ReadOnce();
-            string st = (state ?? "idle").ToLowerInvariant();
-            if (st == "music" || st == "paused" || st == "music-long")
+            foreach (string st in (state ?? "idle").ToLowerInvariant().Split(','))   // several combine: "radar,music"
             {
-                s.Media = new MediaInfo
+                if (st == "music" || st == "paused" || st == "music-long")
                 {
-                    App = "Spotify", Playing = st != "paused", Position = 83, Length = 217, PositionAt = DateTime.UtcNow,
-                    Title = st == "music-long" ? "An Extremely Long Song Title That Goes On (Extended Remix, Remastered 2026)" : "Harbour Lights",
-                    Artist = st == "music-long" ? "The Very Long Band Name Orchestra and Friends" : "Sample Artist",
-                    Album = "Low Tide",
-                };
-            }
-
-            switch ((state ?? "idle").ToLowerInvariant())
-            {
-                case "typing": s.PinState = PinGate.StateTyping; s.Digits = 4; break;
-                case "wrong": case "shake": s.PinState = PinGate.StateWrong; break;
-                case "cooldown": s.PinState = PinGate.StateCooldown; s.CooldownLeft = 27; break;
-                case "admin": s.AdminNotice = true; break;
-                case "bright": s.Bright = true; break;
-                case "night": s.NightDim = CurtainPainter.NightLevel; break;
-                case "radar": s.MapMode = 1; break;
-                case "clouds": s.MapMode = 2; break;
+                    s.Media = new MediaInfo
+                    {
+                        App = "Spotify", Playing = st != "paused", Position = 83, Length = 217, PositionAt = DateTime.UtcNow,
+                        Title = st == "music-long" ? "An Extremely Long Song Title That Goes On (Extended Remix, Remastered 2026)" : "Harbour Lights",
+                        Artist = st == "music-long" ? "The Very Long Band Name Orchestra and Friends" : "Sample Artist",
+                        Album = "Low Tide",
+                    };
+                }
+                switch (st)
+                {
+                    case "typing": s.PinState = PinGate.StateTyping; s.Digits = 4; break;
+                    case "wrong": case "shake": s.PinState = PinGate.StateWrong; break;
+                    case "cooldown": s.PinState = PinGate.StateCooldown; s.CooldownLeft = 27; break;
+                    case "admin": s.AdminNotice = true; break;
+                    case "bright": s.Bright = true; break;
+                    case "night": s.NightDim = CurtainPainter.NightLevel; break;
+                    case "radar": s.MapMode = 1; break;
+                    case "clouds": s.MapMode = 2; break;
+                }
             }
             return s;
         }
