@@ -870,8 +870,8 @@ namespace ClaudeCurtain
         /// The warnings and earthquakes inset (2026-11-21), in the top corner the tide leaves free: the National
         /// Weather Service's alerts whose areas reach the map (warnings first, then watches and advisories, each
         /// event once, with when it ends), and earthquakes: from magnitude 3 on the map in the last day, from 4
-        /// within 300 km in the last three days, with how far and which way when off the map. At most four
-        /// rows. Returns a key for what it shows ("-" when nothing, or no room).
+        /// within 300 km in the last three days, with how far (in miles) and which way when off the map. At most
+        /// four rows. Returns a key for what it shows ("-" when nothing, or no room).
         /// </summary>
         private static string PlaceAlerts(Graphics m, Layout L, WeatherMap map, GeoBox crop, int mw, int mh, DateTime nowLocal,
                                           double lat, double lon, float pad, float band, List<RectangleF> taken)
@@ -902,7 +902,8 @@ namespace ClaudeCurtain
                 DateTime local = q.Utc.ToLocalTime();
                 string when = (local.Date == nowLocal.Date ? "" : local.ToString("ddd ", CultureInfo.InvariantCulture)) +
                               local.ToString("h:mm tt", CultureInfo.InvariantCulture);
-                string where = onMap ? "" : (5 * Math.Round(km / 5)).ToString("0", CultureInfo.InvariantCulture) + " KM " + Compass(lat, lon, q.Lat, q.Lon) + "   \u00B7   ";
+                // how far in miles, as the rest of the curtain (mph, feet, \u00B0F), to the nearest 5
+                string where = onMap ? "" : QuakeMiles(km) + " MI " + Compass(lat, lon, q.Lat, q.Lon) + "   \u00B7   ";
                 quakes.Add(new AlertRow { Color = Primary, Quake = true, Text = "M" + q.Mag.ToString("0.0", CultureInfo.InvariantCulture) + " EARTHQUAKE",
                                           Side = (where + when).ToUpperInvariant() });
                 if (quakes.Count >= 2) break;
@@ -969,6 +970,12 @@ namespace ClaudeCurtain
             double r = Math.PI / 180, dLat = (lat2 - lat1) * r, dLon = (lon2 - lon1) * r;
             double h = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) + Math.Cos(lat1 * r) * Math.Cos(lat2 * r) * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
             return 6371 * 2 * Math.Atan2(Math.Sqrt(h), Math.Sqrt(1 - h));
+        }
+
+        /// <summary>A distance in kilometres as miles to the nearest 5 ("70"), never under 5.</summary>
+        internal static string QuakeMiles(double km)
+        {
+            return Math.Max(5, 5 * Math.Round(km / 1.609344 / 5)).ToString("0", CultureInfo.InvariantCulture);
         }
 
         /// <summary>Which way from the first place to the second, as one of eight compass points.</summary>

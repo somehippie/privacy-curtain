@@ -234,7 +234,8 @@ namespace ClaudeCurtain
             try
             {
                 // The owner's own unlock is not "someone at the keyboard": leave the key presses of the PIN
-                // entry that unlocked out of every count. (Leaving them in would also show the PIN's length.)
+                // entry that unlocked (and a key pressed just before it to wake the screen) out of every count.
+                // (Leaving them in would also show the PIN's length.)
                 if (reason == "pin" && gate != null) excludedKeys = gate.UnlockKeys;
                 FlushInputCounts(false);
                 string how = HowClosed(reason);

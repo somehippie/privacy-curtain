@@ -274,7 +274,11 @@ namespace ClaudeCurtain
             if (vk == Native.VK_RETURN)
             {
                 queue.Push(up ? (vk | KeyQueue.FlagUp) : (vk | mark));
+                return;
             }
+            // Any other key is no part of a PIN, but one pressed just before an entry is the owner waking the
+            // screen, so the gate hears of each counted press (see PinGate.WakeMs).
+            if (!up && counted) queue.Push(vk | mark);
         }
 
         private IntPtr MouseProc(int nCode, IntPtr wParam, IntPtr lParam)

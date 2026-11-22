@@ -166,7 +166,9 @@ them together stay under about 1.8 MB, and the weather map's files under another
 
 Your own unlock is not counted as someone at the keyboard. The key presses of the PIN entry that unlocked
 (its digits, any Backspace corrections, and Enter) are left out of every count: the summary, the event log
-and the "all clear" alert. That also keeps the PIN's length out of them. Wrong attempts still count.
+and the "all clear" alert. That also keeps the PIN's length out of them. So is a key pressed just before the
+PIN to wake the screen, as at Windows' lock screen: one key pressed with nothing typed, at most 10 seconds
+before the PIN's first digit. Wrong attempts still count.
 
 ## Alerts (optional)
 
@@ -375,7 +377,8 @@ And in the left column:
   (`local\zone-*.txt`). Earthquakes of magnitude 2.5 and up over the last three days, from the USGS feed,
   are rings sized by magnitude that fade with age. A small inset in the top corner the tide leaves lists
   up to four: warnings, then earthquakes (from M3 on the map in the last day, from M4 within 300 km in the
-  last three days, with how far and which way when off the map), then watches and advisories, each with
+  last three days, with how far (in miles, like the curtain's mph and feet) and which way when off the
+  map), then watches and advisories, each with
   when it ends.
 
   The close-up: on a landscape screen, in the room beside the message under the map, a map of the

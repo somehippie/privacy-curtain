@@ -120,6 +120,7 @@ namespace ClaudeCurtain
                     else if (c == 'B') Key(Native.VK_BACK, false, false);
                     else if (c == 'X') Key(Native.VK_ESCAPE, false, false);
                     else if (c == 'S') Key(Native.VK_RETURN, false, true);
+                    else if (c == 'W') { Key(0x20, false, false); Key(0x20, true, false); }   // Space, as to wake the screen
                 }
                 return this;
             }
@@ -211,6 +212,26 @@ namespace ClaudeCurtain
             Check("gate: keys the hooks did not count are not taken off", notCounted.Unlocked && notCounted.Gate.UnlockKeys == 0);
             Driver noUnlock = new Driver("4821") { Counted = true }.Type("4821");
             Check("gate: nothing is taken off without an unlock", noUnlock.Gate.UnlockKeys == 0);
+
+            // A key pressed to wake the screen just before the PIN is the owner's too (2026-11-22).
+            Driver woke = new Driver("4821") { Counted = true }.Type("W").Wait(3000).Type("4821E");
+            Driver wokeEnter = new Driver("4821") { Counted = true }.Type("E4821E");
+            Driver wokeEsc = new Driver("4821") { Counted = true }.Type("X4821E");
+            Check("gate: a key pressed with nothing typed just before the PIN belongs to the unlock (Space, Enter, Esc: " +
+                  woke.Gate.UnlockKeys + " " + wokeEnter.Gate.UnlockKeys + " " + wokeEsc.Gate.UnlockKeys + ")",
+                  woke.Unlocked && woke.Gate.UnlockKeys == 6 && wokeEnter.Unlocked && wokeEnter.Gate.UnlockKeys == 6 &&
+                  wokeEsc.Unlocked && wokeEsc.Gate.UnlockKeys == 6);
+            Driver early = new Driver("4821") { Counted = true }.Type("W").Wait(PinGate.WakeMs + 1000).Type("4821E");
+            Driver twice = new Driver("4821") { Counted = true }.Type("WWW4821E");
+            Driver midEntry = new Driver("4821") { Counted = true }.Type("48W21E");
+            Driver beforeWrong = new Driver("4821") { Counted = true }.Type("W1111E4821E");
+            Driver wokeUncounted = new Driver("4821").Type("W4821E");
+            Check("gate: but not one pressed long before, nor more than one, nor one mid-entry or before a wrong try, nor an uncounted one (" +
+                  early.Gate.UnlockKeys + " " + twice.Gate.UnlockKeys + " " + midEntry.Gate.UnlockKeys + " " + beforeWrong.Gate.UnlockKeys + " " +
+                  wokeUncounted.Gate.UnlockKeys + ")",
+                  early.Unlocked && early.Gate.UnlockKeys == 5 && twice.Unlocked && twice.Gate.UnlockKeys == 6 &&
+                  midEntry.Unlocked && midEntry.Gate.UnlockKeys == 5 && beforeWrong.Unlocked && beforeWrong.Gate.UnlockKeys == 5 &&
+                  wokeUncounted.Unlocked && wokeUncounted.Gate.UnlockKeys == 0);
         }
 
         private static void TestKeyQueue()
@@ -536,6 +557,8 @@ namespace ClaudeCurtain
                 bool w6 = ws == "Light and variable" && double.IsNaN(wto) && wtop == -1;
                 Check("now: the hour's wind is read: '5–10 mph WNW' blows toward 112.5 degrees at up to 10 mph, '7 mph S' toward the north; calm, missing, directionless and unreadable winds (" +
                       w1 + " " + w2 + " " + w3 + " " + w4 + " " + w5 + " " + w6 + ")", w1 && w2 && w3 && w4 && w5 && w6);
+                Check("alerts: an earthquake off the map says how far in miles, to the nearest 5 (115 km = 70, 300 km = 185, 2 km = 5)",
+                      CurtainPainter.QuakeMiles(115) == "70" && CurtainPainter.QuakeMiles(300) == "185" && CurtainPainter.QuakeMiles(2) == "5");
 
                 Options po = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") };
                 Func<DisplayState, int, int, List<string>> texts = (v, sw, sh) =>
@@ -1159,8 +1182,8 @@ namespace ClaudeCurtain
                     CurtainPainter.AlertPanel p = l.MapAlerts;
                     bool placed = p != null && l.MapTide != null && !p.Panel.IntersectsWith(l.MapTide.Panel) &&
                                   p.Panel.Right <= l.Map.Width + 0.5f && p.Panel.Left >= -0.5f;
-                    bool rows = p != null && p.Rows.Count == 3 && p.Rows[0].Quake && p.Rows[0].Text == "M4.7 EARTHQUAKE" && p.Rows[0].Side.Contains(" KM S") &&
-                                p.Rows[1].Quake && p.Rows[1].Text == "M3.4 EARTHQUAKE" && !p.Rows[1].Side.Contains(" KM") &&
+                    bool rows = p != null && p.Rows.Count == 3 && p.Rows[0].Quake && p.Rows[0].Text == "M4.7 EARTHQUAKE" && p.Rows[0].Side.Contains(" MI S") &&
+                                p.Rows[1].Quake && p.Rows[1].Text == "M3.4 EARTHQUAKE" && !p.Rows[1].Side.Contains(" MI") &&
                                 !p.Rows[2].Quake && p.Rows[2].Text == "HIGH SURF ADVISORY" && p.Rows[2].Side.StartsWith("UNTIL ");
                     Check("alerts: the sample's quakes (the strong one off the map with how far and which way) and its surf advisory are listed in the corner the tide leaves (" +
                           (p == null ? "none" : string.Join("; ", p.Rows.ConvertAll(r => r.Text + " " + r.Side).ToArray())) + ")", placed && rows);

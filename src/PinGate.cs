@@ -84,6 +84,14 @@ namespace ClaudeCurtain
         private int wrongStreak;
         private int entryKeys;     // counted key presses that belong to the entry being typed
         private int unlockKeys;    // the same, for the entry that unlocked
+        private long wakeAtMs = -1;   // when a counted key was last pressed with nothing typed (-1 = not since)
+
+        /// <summary>
+        /// A key pressed with nothing typed this soon before an entry's first digit belongs to the entry: the
+        /// owner waking the screen first, as at Windows' lock screen (2026-11-22: nearly every unlock had one
+        /// such key, which then alerted the phone as "someone" at the keyboard). One key at most.
+        /// </summary>
+        public const int WakeMs = 10000;
 
         // Read by the UI thread for display only.
         private volatile int state;
@@ -102,8 +110,9 @@ namespace ClaudeCurtain
         public int WrongTotal { get { return wrongTotal; } }
 
         /// <summary>
-        /// How many counted key presses made up the entry that unlocked (0 until then). Only keys fed with
-        /// counted=true are included, so this never exceeds what the hooks tallied.
+        /// How many counted key presses made up the entry that unlocked (0 until then), with the key pressed
+        /// just before it to wake the screen (see WakeMs). Only keys fed with counted=true are included, so
+        /// this never exceeds what the hooks tallied.
         /// </summary>
         public int UnlockKeys { get { return unlockKeys; } }
 
@@ -128,6 +137,8 @@ namespace ClaudeCurtain
             if (digit >= 0)
             {
                 if (up) return false;
+                if (buffer.Length == 0 && !overflow && wakeAtMs >= 0 && nowMs - wakeAtMs <= WakeMs) entryKeys = 1;
+                wakeAtMs = -1;
                 if (buffer.Length < MaxBuffer) buffer.Append((char)('0' + digit));
                 else overflow = true;
                 if (counted) entryKeys++;
@@ -157,13 +168,18 @@ namespace ClaudeCurtain
                         if (state == StateTyping) state = StateIdle;
                     }
                 }
+                else if (counted) wakeAtMs = nowMs;   // nothing to delete
                 enterArmed = false;
                 return false;
             }
 
             if (vk == Native.VK_ESCAPE)
             {
-                if (!up) ClearBuffer();
+                if (!up)
+                {
+                    if (counted && buffer.Length == 0 && !overflow) wakeAtMs = nowMs;   // nothing to clear
+                    ClearBuffer();
+                }
                 return false;
             }
 
@@ -174,6 +190,7 @@ namespace ClaudeCurtain
                 {
                     enterArmed = buffer.Length > 0 || overflow;
                     if (counted && enterArmed) entryKeys++;   // a held Enter repeats; each repeat was counted too
+                    else if (counted) wakeAtMs = nowMs;       // nothing typed
                     return false;
                 }
                 if (!enterArmed) return false;
@@ -181,6 +198,8 @@ namespace ClaudeCurtain
                 return Submit(nowMs);
             }
 
+            // Any other key (the hooks pass on only counted presses of these): perhaps the owner waking the screen.
+            if (!up && counted && buffer.Length == 0 && !overflow) wakeAtMs = nowMs;
             return false;
         }
 
