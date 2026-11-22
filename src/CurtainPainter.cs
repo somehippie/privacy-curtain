@@ -752,6 +752,7 @@ namespace ClaudeCurtain
                         {
                             if (op.Kind == 0) capturedText.Add(new KeyValuePair<string, Color>(op.Text, op.Color));
                             if (op.Kind == 11) capturedText.Add(new KeyValuePair<string, Color>("[graph " + op.Text + "]", op.Color));   // the days' graphs, for the tests
+                            if (op.Kind == 10) capturedText.Add(new KeyValuePair<string, Color>("[glyph " + op.Text + "]", op.Color));   // and the small symbols
                         }
                     }
                 }
@@ -1639,8 +1640,12 @@ namespace ClaudeCurtain
                 float rowW = tx + dayW + gx + tempW + gx * 0.6f + tempW + gx + popW;
                 float slotMin = Math.Max(Measure(m, "12 PM", fLabel.Font, track), Measure(m, "100%", fData.Font, 0)) + gx * 0.6f;
                 float tableW = Math.Max(Math.Max(rowW, headW), 6 * slotMin);
-                for (int i = 0; i < 4; i++)
-                    tableW = Math.Max(tableW, (Measure(m, TileTemplates[i], fData.Font, 0) + gx * 0.4f) / TileShare[i]);
+                // the conditions now, a symbol and a value each (below): the column makes room for four of them,
+                // and the dew point joins them only where the room is there anyway
+                float nowLogo = (float)Math.Round(fData.CapHeight * NowLogoScale), nowLogoGap = (float)Math.Round(gx * 0.3f), nowGap = gx * 0.75f;
+                float[] nowW = new float[NowTemplates.Length];
+                for (int i = 0; i < nowW.Length; i++) nowW[i] = nowLogo + nowLogoGap + ValueWidth(m, NowTemplates[i], fData, fSmall);
+                tableW = Math.Max(tableW, nowW[0] + nowW[2] + nowW[3] + nowW[4] + 3 * nowGap);
                 needed = Math.Max(needed, tableW);
                 float w = Math.Max(width, tableW);
 
@@ -1657,28 +1662,65 @@ namespace ClaudeCurtain
                 y += st(6) * 0.8f;
                 ops.Add(new Op { Kind = 1, X = ox, Y = (float)Math.Round(y), W = w, H = 1, Color = RuleColor });
 
-                // ---- right now: humidity and wind for this hour, the next sunrise and sunset (four quiet tiles)
+                // ---- right now (2026-11-21, the user: "logos for wind speed direction, humidity %", then "add dew
+                // point and logo if it fits in that row"): a symbol and a value each, no words. The humidity by a
+                // drop filled to its level; the dew point by a thermometer and a drop; the wind's speed by an arrow
+                // on a ring, pointing the way it blows as on the map (the ring alone when calm; amber from 20 mph);
+                // the next sunrise and sunset by a sun on the horizon with an arrow up or down. The first sits at
+                // the column's left edge and the last ends at its right, with even gaps between. The dew point
+                // comes only when all five fit with at least 3/4 of a step between them, judged from templates so
+                // the data never decides it; the column never widens for it.
                 {
                     HourPoint nowHour = hours.Length > 0 ? hours[0] : null;
                     DateTime rise, set;
                     bool sun = NextSun(s.Now, s.Lat, s.Lon, out rise, out set);
+                    string speed;
+                    double toward;
+                    int top;
+                    ParseWind(nowHour != null ? nowHour.Wind : "", out speed, out toward, out top);
+                    bool windy = top >= WindyMph;
                     string[] values =
                     {
                         nowHour != null && nowHour.Humidity >= 0 ? nowHour.Humidity.ToString(CultureInfo.InvariantCulture) + "%" : "--",
-                        nowHour != null && nowHour.Wind.Length > 0 ? nowHour.Wind : "--",
+                        nowHour != null && nowHour.DewPoint != HourPoint.Unknown ? nowHour.DewPoint.ToString(CultureInfo.InvariantCulture) + "°" : "--",
+                        speed.Length == 0 ? "--" : top >= 0 && speed != "Calm" ? speed + " mph" : speed,
                         sun ? rise.ToString("t", CultureInfo.CurrentCulture) : "--",
                         sun ? set.ToString("t", CultureInfo.CurrentCulture) : "--",
                     };
-                    y += st(5) + fLabel.CapHeight;
-                    float vy = y + st(6) + fData.CapHeight;
-                    float tx0 = ox;
-                    for (int i = 0; i < 4; i++)
+                    double[] marks =
                     {
-                        float tw = w * TileShare[i];
-                        AddText(ops, m, TileLabels[i], fLabel, Tertiary, tx0, y, track);
-                        Op v = AddTextOp(ops, values[i], fData, Secondary, tx0, vy, 0);
-                        if (Measure(m, values[i], fData.Font, 0) > tw - gx * 0.4f) v.W = tw - gx * 0.4f;   // never into the next tile
-                        tx0 += tw;
+                        nowHour != null && nowHour.Humidity >= 0 ? nowHour.Humidity / 100.0 : double.NaN,
+                        double.NaN,
+                        speed == "Calm" ? -1 : toward,
+                        double.NaN,
+                        double.NaN,
+                    };
+                    bool withDew = nowW[0] + nowW[1] + nowW[2] + nowW[3] + nowW[4] + 4 * nowGap <= w + 0.5f;
+                    int[] order = withDew ? new[] { 0, 1, 2, 3, 4 } : new[] { 0, 2, 3, 4 };
+                    float[] itemW = new float[order.Length];
+                    float sum = 0;
+                    for (int k = 0; k < order.Length; k++)
+                    {
+                        itemW[k] = Math.Min(nowW[order[k]], nowLogo + nowLogoGap + ValueWidth(m, values[order[k]], fData, fSmall));
+                        sum += itemW[k];
+                    }
+                    float between = (w - sum) / (order.Length - 1);
+                    float vy = (float)Math.Round(y + st(5) + nowLogo / 2f + fData.CapHeight / 2f);
+                    float ix = ox;
+                    for (int k = 0; k < order.Length; k++)
+                    {
+                        int i = order[k];
+                        Color ink = i == 2 && windy ? Warn : Secondary;
+                        ops.Add(new Op { Kind = 10, Text = NowSymbols[i], X = (float)Math.Round(ix), Y = (float)Math.Round(vy - fData.CapHeight / 2f - nowLogo / 2f),
+                                         W = nowLogo, H = nowLogo, Value = marks[i], Color = ink });
+                        string num, word;
+                        SplitUnit(values[i], out num, out word);
+                        float vx = ix + nowLogo + nowLogoGap, room = itemW[k] - nowLogo - nowLogoGap;
+                        float nw = Measure(m, num, fData.Font, 0);
+                        Op v = AddTextOp(ops, num, fData, ink, vx, vy, 0);
+                        if (nw > room) v.W = room;   // an unexpected long value is cut short, never run into the next
+                        else if (word.Length > 0) AddText(ops, m, word, fSmall, i == 2 && windy ? Warn : Tertiary, vx + nw, vy, 0);
+                        ix += itemW[k] + between;
                     }
                     y = vy + fData.Font.Size * 0.3f;
                 }
@@ -1935,9 +1977,53 @@ namespace ClaudeCurtain
         public const int WindyMph = 20;       // a day's peak wind from here (or gusts from WindyGustMph) shows in amber
         public const int WindyGustMph = 30;
 
-        private static readonly string[] TileLabels = { "HUMIDITY", "WIND", "SUNRISE", "SUNSET" };
-        private static readonly string[] TileTemplates = { "100%", "15–25 mph WNW", "12:59 AM", "12:59 PM" };
-        private static readonly float[] TileShare = { 0.24f, 0.32f, 0.22f, 0.22f };
+        // The conditions now: their symbols, the widest values they make room for (the dew point's second), and
+        // the symbols' size in the values' cap heights.
+        private static readonly string[] NowSymbols = { "humidity", "dewpoint", "compass", "sunrise", "sunset" };
+        private static readonly string[] NowTemplates = { "100%", "-99°", "15–25 mph", "12:59 AM", "12:59 PM" };
+        private const float NowLogoScale = 1.6f;
+        private static readonly string[] Compass16 = { "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW" };
+
+        /// <summary>
+        /// The hour's wind as the forecast writes it ("5–10 mph WNW", "7 mph", "Calm"): the speed without its unit
+        /// ("5–10", "Calm"; the text as it is if it does not read; "" if none), the way the wind blows in degrees
+        /// clockwise from north (the forecast names where it comes from; NaN when calm or not given), and its top
+        /// speed in mph (0 when calm, -1 if unknown).
+        /// </summary>
+        internal static void ParseWind(string wind, out string speed, out double toward, out int top)
+        {
+            speed = "";
+            toward = double.NaN;
+            top = -1;
+            string w = (wind ?? "").Trim();
+            if (w.Length == 0) return;
+            if (w.Equals("Calm", StringComparison.OrdinalIgnoreCase)) { speed = "Calm"; top = 0; return; }
+            Match m = Regex.Match(w, @"^(?<s>\d+(?:\s*[–-]\s*\d+)?)\s*mph(?:\s+(?<d>[NESW]{1,3}))?$", RegexOptions.IgnoreCase);
+            if (!m.Success) { speed = w; return; }
+            speed = Regex.Replace(m.Groups["s"].Value, @"\s*[–-]\s*", "–");
+            foreach (Match n in Regex.Matches(speed, @"\d+")) top = Math.Max(top, int.Parse(n.Value, CultureInfo.InvariantCulture));
+            int from = m.Groups["d"].Success ? Array.IndexOf(Compass16, m.Groups["d"].Value.ToUpperInvariant()) : -1;
+            if (from >= 0) toward = (from * 22.5 + 180) % 360;
+        }
+
+        /// <summary>A value as the conditions set it: the number, and a last word without digits ("mph", "AM") apart, set smaller.</summary>
+        private static void SplitUnit(string value, out string number, out string word)
+        {
+            number = value ?? "";
+            word = "";
+            int sp = number.LastIndexOf(' ');
+            if (sp <= 0 || sp == number.Length - 1) return;
+            foreach (char ch in number.Substring(sp + 1)) if (char.IsDigit(ch)) return;
+            word = number.Substring(sp);
+            number = number.Substring(0, sp);
+        }
+
+        private static float ValueWidth(Graphics m, string value, Face fData, Face fSmall)
+        {
+            string number, word;
+            SplitUnit(value, out number, out word);
+            return Measure(m, number, fData.Font, 0) + (word.Length > 0 ? Measure(m, word, fSmall.Font, 0) : 0);
+        }
 
         /// <summary>The next sunrise and the next sunset after "now", in local time (false if unknown or polar).</summary>
         internal static bool NextSun(DateTime now, double lat, double lon, out DateTime rise, out DateTime set)
@@ -2281,7 +2367,7 @@ namespace ClaudeCurtain
                     if (pic != null) g.DrawImageUnscaled(pic, (int)Math.Round(ox + op.X), (int)Math.Round(oy + op.Y));
                     break;
                 case 10:
-                    DrawGlyph(g, op.Text, new RectangleF(ox + op.X, oy + op.Y, op.W, op.H), op.Color);
+                    DrawGlyph(g, op.Text, new RectangleF(ox + op.X, oy + op.Y, op.W, op.H), op.Color, op.Value);
                     break;
                 case 11:
                     DrawDayGraph(g, op, ox, oy, unit);
@@ -2382,9 +2468,11 @@ namespace ClaudeCurtain
 
         /// <summary>
         /// The forecast's small symbols: a triangle up for the high and down for the low, the wind symbol for the
-        /// peak wind, and a pennant on its pole for the gusts (the meteorologist's mark for strong wind).
+        /// peak wind, and a pennant on its pole for the gusts (the meteorologist's mark for strong wind); and the
+        /// conditions' symbols (humidity, dewpoint, compass, sunrise, sunset), where value is the humidity's level
+        /// (0..1) or the way the wind blows.
         /// </summary>
-        internal static void DrawGlyph(Graphics g, string kind, RectangleF b, Color c)
+        internal static void DrawGlyph(Graphics g, string kind, RectangleF b, Color c, double value = double.NaN)
         {
             SmoothingMode was = g.SmoothingMode;
             g.SmoothingMode = SmoothingMode.AntiAlias;
@@ -2401,6 +2489,19 @@ namespace ClaudeCurtain
                         break;
                     case "wind":
                         DrawSymbol(g, "wind", b, c);
+                        break;
+                    case "humidity":
+                        DrawHumidity(g, b, c, value);
+                        break;
+                    case "dewpoint":
+                        DrawDewPoint(g, b, c);
+                        break;
+                    case "compass":
+                        DrawCompass(g, b, c, value);
+                        break;
+                    case "sunrise":
+                    case "sunset":
+                        DrawSunTime(g, b, c, kind == "sunrise");
                         break;
                     case "gust":
                         float pole = b.Left + pen.Width / 2f;
@@ -2553,6 +2654,12 @@ namespace ClaudeCurtain
 
         private static void DrawDroplet(Graphics g, RectangleF r, Color c)
         {
+            using (SolidBrush b = new SolidBrush(c)) g.FillPolygon(b, DropletPoints(r));
+        }
+
+        /// <summary>A drop's outline in r: its point at the top, round below, its widest 3/4 of r's width.</summary>
+        private static PointF[] DropletPoints(RectangleF r)
+        {
             PointF[] pts = new PointF[48];
             for (int i = 0; i < pts.Length; i++)
             {
@@ -2560,7 +2667,106 @@ namespace ClaudeCurtain
                 pts[i] = new PointF(r.X + r.Width * (float)(0.5 + 0.5 * Math.Sin(t) * Math.Sin(t / 2)),
                                     r.Y + r.Height * (float)(0.5 - 0.5 * Math.Cos(t)));
             }
-            using (SolidBrush b = new SolidBrush(c)) g.FillPolygon(b, pts);
+            return pts;
+        }
+
+        // ---- the conditions' symbols (2026-11-21), on the weather symbols' terms: filled shapes and round-capped
+        // strokes, with a dim tone for what only frames
+
+        private static Color Dim(Color c) { return Scale(c, 0.4); }
+
+        /// <summary>The humidity: a drop, dim, filled from the bottom to the humidity's level (0..1; NaN: unknown).</summary>
+        private static void DrawHumidity(Graphics g, RectangleF b, Color c, double level)
+        {
+            float s = Math.Min(b.Width, b.Height), dh = s * 0.96f, dw = dh * 0.84f;
+            PointF[] drop = DropletPoints(new RectangleF(b.X + (b.Width - dw) / 2f, b.Y + (b.Height - dh) / 2f, dw, dh));
+            using (SolidBrush dim = new SolidBrush(Dim(c))) g.FillPolygon(dim, drop);
+            if (double.IsNaN(level) || level <= 0) return;
+            PointF[] wet = Below(drop, b.Y + (b.Height + dh) / 2f - dh * (float)Math.Min(1, level));
+            if (wet.Length >= 3)
+                using (SolidBrush ink = new SolidBrush(c)) g.FillPolygon(ink, wet);
+        }
+
+        /// <summary>The part of a convex outline at or below the line y (one clip of Sutherland and Hodgman's).</summary>
+        private static PointF[] Below(PointF[] poly, float y)
+        {
+            List<PointF> o = new List<PointF>();
+            for (int i = 0; i < poly.Length; i++)
+            {
+                PointF a = poly[i], z = poly[(i + 1) % poly.Length];
+                bool ina = a.Y >= y, inz = z.Y >= y;
+                if (ina) o.Add(a);
+                if (ina != inz) o.Add(new PointF(a.X + (z.X - a.X) * (y - a.Y) / (z.Y - a.Y), y));
+            }
+            return o.ToArray();
+        }
+
+        /// <summary>The dew point: a thermometer, its bulb full, and a drop beside it.</summary>
+        private static void DrawDewPoint(Graphics g, RectangleF b, Color c)
+        {
+            float s = Math.Min(b.Width, b.Height);
+            float bx = b.X + (b.Width - s) / 2f, by = b.Y + (b.Height - s) / 2f;
+            float lw = Math.Max(1.5f, s * 0.075f);
+            float tubeW = s * 0.25f, tx = bx + s * 0.15f, top = by + s * 0.04f + lw / 2f;
+            float bulbR = s * 0.18f, bcx = tx + tubeW / 2f, bcy = by + s * 0.96f - bulbR;
+            using (Pen pen = new Pen(c, lw) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+            using (SolidBrush ink = new SolidBrush(c))
+            using (GraphicsPath tube = new GraphicsPath())
+            {
+                float join = bcy - bulbR * 0.7f;
+                tube.AddLine(tx, join, tx, top + tubeW / 2f);
+                tube.AddArc(tx, top, tubeW, tubeW, 180, 180);
+                tube.AddLine(tx + tubeW, top + tubeW / 2f, tx + tubeW, join);
+                g.DrawPath(pen, tube);
+                g.FillEllipse(ink, bcx - bulbR, bcy - bulbR, 2 * bulbR, 2 * bulbR);
+                g.FillPolygon(ink, DropletPoints(new RectangleF(bx + s * 0.52f, by + s * 0.22f, s * 0.42f, s * 0.52f)));
+            }
+        }
+
+        /// <summary>
+        /// The wind: a dim ring, and in it an arrow pointing the way the wind blows (degrees clockwise from north,
+        /// as on the map). Calm (-1): the ring alone at full tone, the meteorologists' circle for calm; unknown
+        /// (NaN): the ring alone, dim.
+        /// </summary>
+        private static void DrawCompass(Graphics g, RectangleF b, Color c, double toward)
+        {
+            float s = Math.Min(b.Width, b.Height);
+            float cx = b.X + b.Width / 2f, cy = b.Y + b.Height / 2f;
+            float lw = Math.Max(1.2f, s * 0.06f), r = s * 0.48f - lw / 2f;
+            bool arrow = !double.IsNaN(toward) && toward >= 0;
+            using (Pen ring = new Pen(arrow || double.IsNaN(toward) ? Dim(c) : c, lw))
+                g.DrawEllipse(ring, cx - r, cy - r, 2 * r, 2 * r);
+            if (!arrow) return;
+            double a = toward * Math.PI / 180;
+            float dx = (float)Math.Sin(a), dy = (float)-Math.Cos(a);
+            Func<float, float, PointF> P = (u, v) => new PointF(cx + (dx * u - dy * v) * s, cy + (dy * u + dx * v) * s);
+            using (SolidBrush ink = new SolidBrush(c))
+                g.FillPolygon(ink, new[] { P(0.34f, 0), P(-0.26f, 0.23f), P(-0.11f, 0), P(-0.26f, -0.23f) });
+        }
+
+        /// <summary>Sunrise or sunset: half a sun on the horizon with its rays, and under it an arrow up or down.</summary>
+        private static void DrawSunTime(Graphics g, RectangleF b, Color c, bool rise)
+        {
+            float s = Math.Min(b.Width, b.Height);
+            float bx = b.X + (b.Width - s) / 2f, by = b.Y + (b.Height - s) / 2f;
+            float lw = Math.Max(1.5f, s * 0.075f);
+            float cx = bx + s * 0.5f, hy = by + s * 0.55f, r = s * 0.2f;
+            using (Pen pen = new Pen(c, lw) { StartCap = LineCap.Round, EndCap = LineCap.Round, LineJoin = LineJoin.Round })
+            using (SolidBrush ink = new SolidBrush(c))
+            {
+                g.FillPie(ink, cx - r, hy - r, 2 * r, 2 * r, 180, 180);
+                foreach (float deg in new[] { 200f, 235f, 270f, 305f, 340f })
+                {
+                    double a = deg * Math.PI / 180;
+                    float ux = (float)Math.Cos(a), uy = (float)Math.Sin(a);
+                    g.DrawLine(pen, cx + ux * s * 0.3f, hy + uy * s * 0.3f, cx + ux * s * 0.41f, hy + uy * s * 0.41f);
+                }
+                g.DrawLine(pen, bx + s * 0.04f, hy, bx + s * 0.96f, hy);
+                float a0 = hy + s * 0.15f, a1 = hy + s * 0.33f, half = s * 0.16f;
+                g.DrawLines(pen, rise
+                    ? new[] { new PointF(cx - half, a1), new PointF(cx, a0), new PointF(cx + half, a1) }
+                    : new[] { new PointF(cx - half, a0), new PointF(cx, a1), new PointF(cx + half, a0) });
+            }
         }
 
         // ---- weather symbols, drawn as filled shapes on a 1 x 1 design grid

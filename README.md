@@ -220,8 +220,12 @@ about what it is doing. Everything on it comes from one proportional system buil
 - **Data.** CPU and download rate are ten-minute sparklines with the newest reading at the right and a dot
   on it, and so is memory; disk is a proportion bar. CPU and memory are drawn on a fixed 0–100% scale, so
   a quiet machine looks quiet. Every value is also printed as text beside its graphic, so nothing depends on reading a
-  chart. The forecast opens with four quiet tiles (humidity and wind for this hour, the next sunrise and
-  sunset), then the next six hours as a strip: each hour's symbol, its temperature on one smooth curve
+  chart. The forecast opens with the conditions now as a row of symbols, each with its value and no words:
+  the humidity by a drop filled to its level, the dew point by a thermometer and a drop, the wind's speed by
+  an arrow on a ring pointing the way it blows, as on the map (the ring alone when calm, amber from 20 mph),
+  and the next sunrise and sunset by a sun on the horizon with an arrow up or down. They spread evenly
+  across the column; the dew point joins only where all five fit, and the column never widens for it.
+  Then the next six hours as a strip: each hour's symbol, its temperature on one smooth curve
   (drawn on at least a 6° range, so a flat afternoon looks flat), and its chance of rain as a bar. Then
   three days. Each day also shows its peak wind: the strongest sustained speed, and under it the hour it peaks and the strongest gust, from the hourly wind and gust series in the forecast grid's raw data (today counts from now, tonight until 6 AM). It turns amber from 20 mph, or gusts from 30. It takes only the room between the low and the rain, so it never moves anything. Each row is two small graphs drawn like the system's sparklines, from the forecast grid's hours that the weather script adds to the row: the temperature from 6 AM to 6 AM (tonight's from its start, on the same clock, ticks at noon and midnight) with the high marked and "low–high" beside it, and the wind over the same hours with its peak marked and its peak and strongest gust ("8–14 mph"), amber from 20 mph or gusts of 30; one scale serves all three rows, so a warmer or windier day stands out. The words and the chance of rain take the second line; day names are short. A row without its hours shows symbols instead: a small triangle up for the high and down for the low, each with the hour it comes, the wind symbol before the peak wind, and a pennant before the strongest gust. Rain is the one cool data hue, a muted steel blue. Weather symbols are drawn in code (sun,
   moon, cloud, partly cloudy, rain, storm, snow, fog, wind).
@@ -301,8 +305,8 @@ The data column:
 - **Machine stats**, live from inside the curtain (sampled once a second, no performance counters, no
   admin): CPU busy %, memory used, download and upload rates, used share of the system drive, and system
   uptime, with ten minutes of history kept in memory for the sparklines.
-- **The local forecast.** Humidity, wind, the next sunrise and sunset, the next six hours, and three days
-  with each day's peak wind and gusts.
+- **The local forecast.** Humidity, dew point, wind, the next sunrise and sunset, the next six hours, and
+  three days with each day's peak wind and gusts.
   Set your location in `config.json` (copy `config.example.json`):
 
   ```json
@@ -311,7 +315,7 @@ The data column:
 
   Find your `grid` at `https://api.weather.gov/points/<lat>,<lon>` (read `gridId`, `gridX`, `gridY`).
   `curtain-weather.ps1` then writes three days to `local\weather.txt` and the next twelve hours (with
-  humidity, wind and the forecast grid's location) to `local\weather-hourly.txt`; the curtain reads both
+  humidity, wind, dew point and the forecast grid's location) to `local\weather-hourly.txt`; the curtain reads both
   and refreshes whenever they change. `curtain-on.ps1` starts it in the background with the curtain's
   process ID: it refreshes every 30 minutes while that curtain is up, so a 12- or 24-hour session always
   shows the hours actually ahead, and exits when the curtain closes. The curtain process itself never
@@ -473,7 +477,7 @@ Please read these before relying on the curtain.
 ```
 
 They use a throwaway PIN in `local\test` and never touch the real one, and they never call your notify
-hook. How much to run follows what changed (since 2026-11-21): a change to what is drawn or to the weather data gets the self-tests, preview renders and the `smoke` and `off` stages (a real curtain up and down); the full lifecycle and desktop suites run when input, the PIN, the lifecycle or anything security-related changes, since they prove the curtain can never trap anyone. The self-tests (~163 checks, including PIN hashing/entry rules, which key presses belong to your own
+hook. How much to run follows what changed (since 2026-11-21): a change to what is drawn or to the weather data gets the self-tests, preview renders and the `smoke` and `off` stages (a real curtain up and down); the full lifecycle and desktop suites run when input, the PIN, the lifecycle or anything security-related changes, since they prove the curtain can never trap anyone. The self-tests (~165 checks, including PIN hashing/entry rules, which key presses belong to your own
 unlock, the time-zone label, the stats sampler, weather-file reading, and the design: every state rendered
 at 720p, 1080p, 16:10, 1440p, ultrawide and portrait, fitting the screen, the columns exactly φ : 1, the
 forecast's header on the map's line,

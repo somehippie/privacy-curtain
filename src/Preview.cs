@@ -256,6 +256,7 @@ namespace ClaudeCurtain
         {
             int[] temp = { 58, 60, 62, 63, 63, 62, 60, 58, 57, 56, 55, 55 };
             int[] pop = { 5, 9, 18, 34, 58, 76, 84, 70, 45, 25, 12, 8 };
+            int[] dew = { 45, 48, 51, 52, 53, 53, 52, 50, 50, 50, 50, 50 };   // from the temperature and the humidity below
             string[] text =
             {
                 "Mostly Cloudy", "Mostly Cloudy", "Slight Chance Light Rain", "Chance Light Rain", "Light Rain Likely", "Light Rain",
@@ -266,7 +267,7 @@ namespace ClaudeCurtain
             for (int i = 0; i < h.Length; i++)
             {
                 h[i] = new HourPoint { Start = top.AddHours(i), Temp = temp[i], Pop = pop[i], Text = text[i],
-                                       Humidity = 62 + 2 * i, Wind = (6 + i / 2) + " mph SSW" };
+                                       Humidity = 62 + 2 * i, Wind = (6 + i / 2) + " mph SSW", DewPoint = dew[i] };
                 h[i].IsDay = h[i].Start.Hour >= 7 && h[i].Start.Hour < 17;
             }
             return h;

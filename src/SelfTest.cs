@@ -472,7 +472,7 @@ namespace ClaudeCurtain
                       CurtainPainter.ShortDay("Wednesday") + "', '" + CurtainPainter.ShortDay("Tonight") + "')",
                       times && CurtainPainter.ShortDay("Wednesday") == "WED" && CurtainPainter.ShortDay("Tonight") == "TONIGHT" && CurtainPainter.ShortDay("Monday Night") == "MON NIGHT");
                 bool windyAmber = tw.Contains("8 mph|" + CurtainPainter.Warn.ToArgb());
-                bool plain = !tn.Exists(t => t.Contains(" mph|")) && tn.Contains("Partly sunny|" + CurtainPainter.Tertiary.ToArgb()) &&
+                bool plain = !tn.Exists(t => t.StartsWith("8 mph|")) && tn.Contains("Partly sunny|" + CurtainPainter.Tertiary.ToArgb()) &&
                              tn.Contains("2%|" + CurtainPainter.Tertiary.ToArgb());
                 Check("forecast: each day shows its peak wind, when it peaks and the strongest gust (" + calmShown + "), amber from gusts of " +
                       CurtainPainter.WindyGustMph + " (" + windyAmber + "), and a day without wind reads as before (" + plain + ")",
@@ -515,6 +515,49 @@ namespace ClaudeCurtain
                       temps && wind && graphs == 6 && marks && calm && words);
             }
 
+            // The conditions now (2026-11-21, the user: "logos for wind speed direction, humidity %", then "add dew
+            // point and logo if it fits in that row"): the hour's wind read from its words; a symbol and a value
+            // each, no words; the dew point among them where the row has room; the wind amber when strong.
+            {
+                string ws;
+                double wto;
+                int wtop;
+                CurtainPainter.ParseWind("5–10 mph WNW", out ws, out wto, out wtop);
+                bool w1 = ws == "5–10" && Math.Abs(wto - 112.5) < 1e-9 && wtop == 10;
+                CurtainPainter.ParseWind("7 mph S", out ws, out wto, out wtop);
+                bool w2 = ws == "7" && Math.Abs(wto) < 1e-9 && wtop == 7;
+                CurtainPainter.ParseWind("Calm", out ws, out wto, out wtop);
+                bool w3 = ws == "Calm" && double.IsNaN(wto) && wtop == 0;
+                CurtainPainter.ParseWind("", out ws, out wto, out wtop);
+                bool w4 = ws == "" && double.IsNaN(wto) && wtop == -1;
+                CurtainPainter.ParseWind("12 mph", out ws, out wto, out wtop);
+                bool w5 = ws == "12" && double.IsNaN(wto) && wtop == 12;
+                CurtainPainter.ParseWind("Light and variable", out ws, out wto, out wtop);
+                bool w6 = ws == "Light and variable" && double.IsNaN(wto) && wtop == -1;
+                Check("now: the hour's wind is read: '5–10 mph WNW' blows toward 112.5 degrees at up to 10 mph, '7 mph S' toward the north; calm, missing, directionless and unreadable winds (" +
+                      w1 + " " + w2 + " " + w3 + " " + w4 + " " + w5 + " " + w6 + ")", w1 && w2 && w3 && w4 && w5 && w6);
+
+                Options po = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") };
+                Func<DisplayState, int, int, List<string>> texts = (v, sw, sh) =>
+                {
+                    List<string> t = new List<string>();
+                    foreach (KeyValuePair<string, Color> op in CurtainPainter.TextOpsForTest(v, sw, sh)) t.Add(op.Key + "|" + op.Value.ToArgb());
+                    return t;
+                };
+                string sec = "|" + CurtainPainter.Secondary.ToArgb(), ter = "|" + CurtainPainter.Tertiary.ToArgb(), warn = "|" + CurtainPainter.Warn.ToArgb();
+                DisplayState st = CurtainPreview.Sample(po, "idle");   // this hour: 62% humidity, dew point 45°, 6 mph SSW
+                Func<List<string>, bool> five = t => t.Contains("[glyph humidity]" + sec) && t.Contains("[glyph dewpoint]" + sec) && t.Contains("[glyph compass]" + sec) &&
+                                                     t.Contains("[glyph sunrise]" + sec) && t.Contains("[glyph sunset]" + sec) &&
+                                                     t.Contains("62%" + sec) && t.Contains("45°" + sec) && t.Contains("6" + sec) && t.Contains(" mph" + ter);
+                List<string> big = texts(st, 2560, 1440), hd = texts(st, 1920, 1080), tall = texts(st, 1440, 2560);
+                bool words = !big.Exists(x => x.StartsWith("HUMIDITY|") || x.StartsWith("WIND|") || x.StartsWith("SUNRISE|") || x.StartsWith("SUNSET|") || x.StartsWith("DEW"));
+                st.Hourly[0].Wind = "15–25 mph WNW";
+                List<string> gusty = texts(st, 2560, 1440);
+                bool amber = gusty.Contains("15–25" + warn) && gusty.Contains(" mph" + warn) && gusty.Contains("[glyph compass]" + warn) && !gusty.Contains("[glyph humidity]" + warn);
+                Check("now: a symbol and a value each and no words, the dew point among them at 1440p, 1080p and in portrait (" + five(big) + " " + five(hd) + " " + five(tall) + " " + words +
+                      "), the wind amber from " + CurtainPainter.WindyMph + " mph (" + amber + ")", five(big) && five(hd) && five(tall) && words && amber);
+            }
+
             // The hourly forecast file.
             {
                 HourPoint[] h = SysStats.ParseHourly(new[]
@@ -529,11 +572,12 @@ namespace ClaudeCurtain
                 DateTime now = new DateTime(2026, 11, 15, 10, 42, 0);
                 HourPoint[] next = CurtainPainter.NextHours(CurtainPreview.SampleHourly(now), now, 6);
                 Check("hourly: the strip starts at the current hour and shows six", next.Length == 6 && next[0].Start.Hour == 10 && next[5].Start.Hour == 15);
-                HourPoint[] full = SysStats.ParseHourly(new[] { "2026-11-15T13:00:00-08:00\t64\t9\t1\tMostly Cloudy\t79\t5–10 mph S" });
+                HourPoint[] full = SysStats.ParseHourly(new[] { "2026-11-15T13:00:00-08:00\t64\t9\t1\tMostly Cloudy\t79\t5–10 mph S\t-3" });
                 double la, lo;
                 bool located = SysStats.ParseLocation(new[] { "# hourly forecast", "# location 45.0000 -122.0000" }, out la, out lo);
-                Check("hourly: humidity, wind and the grid's location are read",
-                      full.Length == 1 && full[0].Humidity == 79 && full[0].Wind == "5–10 mph S" && located && Math.Abs(la - 45.0) < 1e-6 && Math.Abs(lo + 122.0) < 1e-6);
+                Check("hourly: humidity, wind, the dew point (unknown on a line without it) and the grid's location are read",
+                      full.Length == 1 && full[0].Humidity == 79 && full[0].Wind == "5–10 mph S" && full[0].DewPoint == -3 && h[0].DewPoint == HourPoint.Unknown &&
+                      located && Math.Abs(la - 45.0) < 1e-6 && Math.Abs(lo + 122.0) < 1e-6);
                 // Sunrise and sunset against published values: London on 21 June 2026 (03:43 and 20:21 UTC)
                 // and New York on 15 November 2026 (11:42 and 21:38 UTC, cross-checked with the Julian-date sunrise equation).
                 DateTime r1, s1, r2, s2;

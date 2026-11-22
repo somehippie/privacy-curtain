@@ -322,7 +322,8 @@ namespace ClaudeCurtain
 
         /// <summary>
         /// Parses weather-hourly.txt: "start TAB temperature TAB precipitation % (may be empty) TAB 1|0 (day) TAB
-        /// short forecast" per line; '#' lines are comments. Lines that do not parse are skipped.
+        /// short forecast", then (each may be missing or empty) "TAB humidity % TAB wind TAB dew point F", per
+        /// line; '#' lines are comments. Lines that do not parse are skipped.
         /// </summary>
         internal static HourPoint[] ParseHourly(string[] lines)
         {
@@ -347,6 +348,8 @@ namespace ClaudeCurtain
                 int hum;
                 if (p.Length > 5 && int.TryParse(p[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out hum)) h.Humidity = Math.Max(0, Math.Min(100, hum));
                 if (p.Length > 6) h.Wind = p[6].Trim();
+                int dew;
+                if (p.Length > 7 && int.TryParse(p[7], NumberStyles.Integer, CultureInfo.InvariantCulture, out dew)) h.DewPoint = dew;
                 list.Add(h);
             }
             return list.ToArray();
@@ -419,5 +422,7 @@ namespace ClaudeCurtain
         public string Text = "";   // short forecast, e.g. "Light Rain Likely"
         public int Humidity = -1;  // relative humidity, %; -1 = not given
         public string Wind = "";   // e.g. "5–10 mph WNW" or "Calm"
+        public int DewPoint = Unknown;   // degrees F
+        public const int Unknown = int.MinValue;
     }
 }

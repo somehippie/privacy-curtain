@@ -274,7 +274,15 @@ function Update-Hourly {
         try { if ($null -ne $p.relativeHumidity.value) { $hum = [int]$p.relativeHumidity.value } } catch {}
         $ws = (([string]$p.windSpeed).Trim() -replace ' to ', [string][char]0x2013)
         $wind = if ($ws -match '^0 mph$' -or -not $ws) { 'Calm' } else { ('{0} {1}' -f $ws, $p.windDirection).Trim() }
-        $lines.Add(("{0}`t{1}`t{2}`t{3}`t{4}`t{5}`t{6}" -f $start.ToString('o', $inv), $p.temperature, $pop, $day, (($p.shortForecast -replace '\s+', ' ').Trim()), $hum, $wind))
+        $dew = ''   # NWS gives the dew point in degrees C, even with units=us
+        try {
+            if ($null -ne $p.dewpoint.value) {
+                $d = [double]$p.dewpoint.value
+                if ([string]$p.dewpoint.unitCode -notmatch 'degF') { $d = $d * 9 / 5 + 32 }
+                $dew = [int][Math]::Round($d, [MidpointRounding]::AwayFromZero)
+            }
+        } catch {}
+        $lines.Add(("{0}`t{1}`t{2}`t{3}`t{4}`t{5}`t{6}`t{7}" -f $start.ToString('o', $inv), $p.temperature, $pop, $day, (($p.shortForecast -replace '\s+', ' ').Trim()), $hum, $wind, $dew))
         if (($lines | Where-Object { $_ -notlike '#*' }).Count -ge 12) { break }
     }
     $hours = @($lines | Where-Object { $_ -notlike '#*' }).Count
