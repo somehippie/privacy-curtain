@@ -42,6 +42,22 @@ namespace ClaudeCurtain
         public DateTime Utc;
     }
 
+    /// <summary>An active National Weather Service alert that reaches the map: what, how serious, until when, where.</summary>
+    internal sealed class MapAlert
+    {
+        public string Event = "";
+        public int Level;                 // 2 = warning, 1 = watch or advisory
+        public DateTime EndsUtc;          // DateTime.MinValue = not given
+        public readonly List<PointF[]> Rings = new List<PointF[]>();   // outlines; X = longitude, Y = latitude
+    }
+
+    /// <summary>A recent earthquake from the USGS feed.</summary>
+    internal sealed class MapQuake
+    {
+        public DateTime Utc;
+        public double Lat, Lon, Mag;
+    }
+
     /// <summary>A station chosen for the map, where it falls in map pixels, and the box its label takes.</summary>
     internal sealed class PlacedStation
     {
@@ -127,6 +143,9 @@ namespace ClaudeCurtain
         public MapFrame[] Sat = new MapFrame[0];     // oldest first, all one kind
         public MapStation[] Stations = new MapStation[0];
         public MapTide Tide;                      // null = no tide station near
+        public MapAlert[] Alerts = new MapAlert[0];  // active alerts that reach the map, by number in map.txt
+        public MapQuake[] Quakes = new MapQuake[0];  // the last QuakeDays of earthquakes, nearby
+        public const double QuakeDays = 3;
         public int DemW, DemH;
         public float[] Elevation;                 // metres over Box, for the relief (null = none)
         public string DemId = "";
@@ -160,6 +179,8 @@ namespace ClaudeCurtain
             public string SatKind = "";
             public int DemZoom = -1, DemX0, DemY0, DemX1, DemY1;
             public MapTide Tide;
+            public readonly SortedDictionary<int, MapAlert> Alerts = new SortedDictionary<int, MapAlert>();
+            public readonly List<MapQuake> Quakes = new List<MapQuake>();
             private readonly List<KeyValuePair<DateTime, KeyValuePair<bool, float>>> tides = new List<KeyValuePair<DateTime, KeyValuePair<bool, float>>>();
 
             public static Index Parse(string[] lines)
@@ -224,6 +245,44 @@ namespace ClaudeCurtain
                                 ix.DemZoom = z; ix.DemX0 = x0; ix.DemY0 = y0; ix.DemX1 = x1; ix.DemY1 = y1;
                             }
                             break;
+                        case "alert":
+                        {
+                            int id, lv;
+                            DateTime ends = DateTime.MinValue;
+                            if (p.Length >= 5 && Whole(p[1], 1, 999, out id) && Whole(p[2], 1, 2, out lv) && (p[3] == "-" || Utc(p[3], out ends)) &&
+                                !ix.Alerts.ContainsKey(id) && ix.Alerts.Count < 50)
+                            {
+                                string ev = string.Join(" ", p, 4, p.Length - 4);
+                                ix.Alerts[id] = new MapAlert { Event = ev.Length > 60 ? ev.Substring(0, 60) : ev, Level = lv, EndsUtc = ends };
+                            }
+                            break;
+                        }
+                        case "alertring":
+                        {
+                            int id;
+                            MapAlert a;
+                            if (p.Length >= 5 && Whole(p[1], 1, 999, out id) && ix.Alerts.TryGetValue(id, out a) && a.Rings.Count < 200)
+                            {
+                                List<PointF> pts = new List<PointF>();
+                                for (int k = 2; k < p.Length && pts.Count < 5000; k++)
+                                {
+                                    string[] ll = p[k].Split(',');
+                                    double la, lo;
+                                    if (ll.Length == 2 && Num(ll[0], out la) && Num(ll[1], out lo) && Math.Abs(la) <= 90 && Math.Abs(lo) <= 180)
+                                        pts.Add(new PointF((float)lo, (float)la));
+                                }
+                                if (pts.Count >= 3) a.Rings.Add(pts.ToArray());
+                            }
+                            break;
+                        }
+                        case "quake":
+                        {
+                            double qa, qo, mg;
+                            if (p.Length == 5 && Utc(p[1], out t) && Num(p[2], out qa) && Num(p[3], out qo) && Num(p[4], out mg) &&
+                                Math.Abs(qa) <= 90 && Math.Abs(qo) <= 180 && mg >= 0 && mg < 10 && ix.Quakes.Count < 500)
+                                ix.Quakes.Add(new MapQuake { Utc = t, Lat = qa, Lon = qo, Mag = mg });
+                            break;
+                        }
                         case "tidestation":
                             double tla, tlo;
                             if (p.Length == 4 && PlainName(p[1]) && p[1].Length <= 12 && Num(p[2], out tla) && Num(p[3], out tlo) &&
@@ -365,6 +424,11 @@ namespace ClaudeCurtain
                 m.Sat = sat.ToArray();
                 m.Stations = ix.Stations.FindAll(st => (utcNow - st.Utc).TotalHours <= StationStaleHours).ToArray();
                 m.Tide = ix.Tide;
+                List<MapAlert> alerts = new List<MapAlert>();
+                foreach (MapAlert a in ix.Alerts.Values)
+                    if (a.Rings.Count > 0 && (a.EndsUtc == DateTime.MinValue || a.EndsUtc > utcNow)) alerts.Add(a);   // an ended one is gone
+                m.Alerts = alerts.ToArray();
+                m.Quakes = ix.Quakes.FindAll(q => q.Utc <= utcNow.AddMinutes(10) && (utcNow - q.Utc).TotalDays <= QuakeDays).ToArray();
                 if (ix.DemZoom > 0) LoadDem(m, dir, ix);
                 m.Key = m.MakeKey();
                 return m;
@@ -572,6 +636,8 @@ namespace ClaudeCurtain
             foreach (MapStation s in Stations)
                 b.Append('|').Append(s.Id).Append(' ').Append(s.TempF).Append(' ').Append(s.WindFrom).Append(' ').Append(s.WindMph).Append(' ').Append(s.GustMph);
             if (Tide != null) b.Append("|tide ").Append(Tide.Id).Append(' ').Append(Tide.Times.Length > 0 ? Tide.Times[0].Ticks : 0);
+            foreach (MapAlert a in Alerts) b.Append("|alert ").Append(a.Level).Append(' ').Append(a.EndsUtc.Ticks).Append(' ').Append(a.Rings.Count).Append(' ').Append(a.Event);
+            foreach (MapQuake q in Quakes) b.Append("|quake ").Append(q.Utc.Ticks).Append(' ').Append(q.Mag.ToString("0.0", CultureInfo.InvariantCulture));
             return b.ToString();
         }
 
@@ -1088,6 +1154,19 @@ namespace ClaudeCurtain
             // The tide, at the river mouth: rising towards a high in about two hours.
             double[] hours = { -10.5, -4.2, 2.1, 8.4, 14.3, 20.7, 26.9 };
             float[] feet = { 5.9f, 0.6f, 6.3f, 2.1f, 5.7f, -0.2f, 6.6f };
+            MapAlert surf = new MapAlert { Event = "High Surf Advisory", Level = 1, EndsUtc = nowUtc.AddHours(20) };
+            surf.Rings.Add(new[]
+            {
+                new PointF((float)(cLon - 0.98), (float)(cLat + 0.55)), new PointF((float)(cLon - 0.78), (float)(cLat + 0.55)),
+                new PointF((float)(cLon - 0.80), (float)(cLat + 0.05)), new PointF((float)(cLon - 0.76), (float)(cLat - 0.55)),
+                new PointF((float)(cLon - 0.96), (float)(cLat - 0.55)), new PointF((float)(cLon - 0.99), (float)(cLat + 0.05)),
+            });
+            m.Alerts = new[] { surf };
+            m.Quakes = new[]
+            {
+                new MapQuake { Utc = nowUtc.AddHours(-3), Lat = lat + 0.14, Lon = lon + 0.42, Mag = 3.4 },
+                new MapQuake { Utc = nowUtc.AddHours(-30), Lat = lat - 1.3, Lon = lon + 0.4, Mag = 4.7 },
+            };
             m.Tide = new MapTide { Id = "SAMPLE", Lat = lat - 13 / KmPerDegree, Lon = lon - 58 / kmLon };
             m.Tide.Times = Array.ConvertAll(hours, hh => nowUtc.AddHours(hh));
             m.Tide.High = Array.ConvertAll(feet, ft => ft > 3);

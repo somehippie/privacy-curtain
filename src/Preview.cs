@@ -189,9 +189,9 @@ namespace ClaudeCurtain
                 lines = new[]
                 {
                     "Anytown forecast  (as of 9:05 AM)",
-                    "Today:  Hi 70° / Lo 50°   Partly Sunny  (2% precip)  [wind 12 mph at 3 PM, gusts 21]",
-                    "Tonight:  Lo 48°   Mostly Clear  [wind 6 mph at 9 PM]",
-                    "Monday:  Hi 64° / Lo 47°   Chance Light Rain then Patchy Fog  (53% precip)  [wind 24 mph at 2 PM, gusts 38]",
+                    "Today:  Hi 70° / Lo 50°   Partly Sunny  (2% precip)  [wind 12 mph at 3 PM, gusts 21]  [hi 2 PM, lo 6 AM]",
+                    "Tonight:  Lo 48°   Mostly Clear  [wind 6 mph at 9 PM]  [lo 5 AM]",
+                    "Monday:  Hi 64° / Lo 47°   Chance Light Rain then Patchy Fog  (53% precip)  [wind 24 mph at 2 PM, gusts 38]  [hi 1 PM, lo 7 AM]",
                 };
             }
             s.Weather = lines;

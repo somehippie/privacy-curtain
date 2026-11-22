@@ -119,18 +119,18 @@ function Get-WindHours {
     $hours = @{}
     try {
         $g = Invoke-RestMethod -Uri "https://api.weather.gov/gridpoints/$Grid" -Headers @{ 'User-Agent' = $ua } -TimeoutSec $TimeoutSec
-        foreach ($kind in 'windSpeed', 'windGust') {
+        foreach ($kind in 'windSpeed', 'windGust', 'temperature') {
             foreach ($v in @($g.properties.$kind.values)) {
                 if ($null -eq $v.value) { continue }
                 $parts = ([string]$v.validTime).Split('/')
                 $start = [DateTimeOffset]::Parse($parts[0], $inv)
                 $span = [Xml.XmlConvert]::ToTimeSpan($parts[1])
-                $mph = [double]$v.value / 1.609344
+                $value = if ($kind -eq 'temperature') { [double]$v.value } else { [double]$v.value / 1.609344 }   # degrees C; km/h to mph
                 for ($h = 0; $h -lt [Math]::Max(1, [int]$span.TotalHours); $h++) {
                     $at = $start.AddHours($h).ToLocalTime()
                     $key = $at.ToString('yyyy-MM-ddTHH', $inv)
-                    if (-not $hours.ContainsKey($key)) { $hours[$key] = [pscustomobject]@{ At = $at; Speed = $null; Gust = $null } }
-                    if ($kind -eq 'windSpeed') { $hours[$key].Speed = $mph } else { $hours[$key].Gust = $mph }
+                    if (-not $hours.ContainsKey($key)) { $hours[$key] = [pscustomobject]@{ At = $at; Speed = $null; Gust = $null; Temp = $null } }
+                    switch ($kind) { 'windSpeed' { $hours[$key].Speed = $value } 'windGust' { $hours[$key].Gust = $value } default { $hours[$key].Temp = $value } }
                 }
             }
         }
@@ -156,6 +156,23 @@ function Get-WindPeak($WindHours, [DateTimeOffset]$From, [DateTimeOffset]$To) {
     return ("  [wind {0} mph at {1}{2}]" -f $top, $peak.At.ToString('h tt', [Globalization.CultureInfo]::GetCultureInfo('en-US')), $gustTxt)
 }
 
+# When a day is warmest and when the night after it is coolest, as " [hi 3 PM, lo 6 AM]" (either part may be
+# missing; '' when neither is known): the first hour at the top (or the bottom) of the grid's hourly temperature.
+function Get-TempTimes($Hours, $HiFrom, $HiTo, $LoFrom, $LoTo) {
+    $us = [Globalization.CultureInfo]::GetCultureInfo('en-US')
+    $parts = @()
+    foreach ($pick in @(@('hi', $HiFrom, $HiTo, 'Descending'), @('lo', $LoFrom, $LoTo, 'Ascending'))) {
+        if ($null -eq $pick[1]) { continue }
+        $in = @($Hours | Where-Object { $_.At -ge $pick[1] -and $_.At -lt $pick[2] -and $null -ne $_.Temp })
+        if ($in.Count -eq 0) { continue }
+        $top = if ($pick[3] -eq 'Descending') { ($in | Measure-Object -Property Temp -Maximum).Maximum } else { ($in | Measure-Object -Property Temp -Minimum).Minimum }
+        $at = ($in | Where-Object { $_.Temp -eq $top } | Select-Object -First 1).At
+        $parts += ('{0} {1}' -f $pick[0], $at.ToString('h tt', $us))
+    }
+    if ($parts.Count -eq 0) { return '' }
+    return '  [' + ($parts -join ', ') + ']'
+}
+
 function Update-Daily {
     $r = Invoke-RestMethod -Uri "https://api.weather.gov/gridpoints/$Grid/forecast?units=us" `
                            -Headers @{ 'User-Agent' = $ua } -TimeoutSec $TimeoutSec
@@ -175,6 +192,10 @@ function Update-Daily {
         if ($p.isDaytime) { $from = $day; $to = $day.AddDays(1) } else { $to = $day.AddDays(1).AddHours(6) }
         if ($from -lt $now) { $from = $now.AddMinutes(-$now.Minute).AddSeconds(-$now.Second) }
         $windTxt = Get-WindPeak $windHours $from $to
+        # the high in the day's hours (even those gone by: the high is the day's), the low in the night after it
+        # (tonight, for a night row)
+        if ($p.isDaytime) { $timesTxt = Get-TempTimes $windHours $day.AddHours(6) $day.AddHours(21) $day.AddHours(18) $day.AddDays(1).AddHours(10) }
+        else { $timesTxt = Get-TempTimes $windHours $null $null $from $day.AddDays(1).AddHours(10) }
         $hi = $null; $lo = $null
         if ($p.isDaytime) {
             $hi = $p.temperature
@@ -190,7 +211,8 @@ function Update-Daily {
         $pop = $null
         try { $pop = [int]$p.probabilityOfPrecipitation.value } catch {}
         $popTxt = if ($pop -gt 0) { "  ({0}% precip)" -f $pop } else { '' }
-        $lines.Add(("{0}:  {1}   {2}{3}{4}" -f (Get-DayLabel $p), $temp, $desc, $popTxt, $windTxt))
+        if ($null -eq $hi) { $timesTxt = $timesTxt -replace 'hi [^,\]]+(, )?', '' -replace '\[\]', '' }
+        $lines.Add(("{0}:  {1}   {2}{3}{4}{5}" -f (Get-DayLabel $p), $temp, $desc, $popTxt, $windTxt, $timesTxt))
         $shown++
     }
     Write-Atomic $out $lines
@@ -539,6 +561,97 @@ function Update-Frames([string]$Prefix, [string]$Kind, [string]$Workspace, [stri
     return $lines.ToArray()
 }
 
+# ------------------------------------------------------------------ warnings and earthquakes
+# The National Weather Service's active alerts for the state the forecast grid is in (warnings in coral on the
+# map, watches and advisories in amber): surf, wind, air quality, flood, fire, tornado. An alert names forecast
+# zones; their outlines come from the same API, kept in local\zone-<id>.txt (a zone's outline seldom changes;
+# fetched again after 30 days), thinned to points about 400 m apart. Only alerts that reach the map's box,
+# widened by a degree, are written. Outlooks and statements are left out. Lines in map.txt:
+#   alert N LEVEL ENDS_UTC|- EVENT      (LEVEL 2 = warning, 1 = watch or advisory)
+#   alertring N lat,lon lat,lon ...
+function Get-Rings($Geometry) {
+    $rings = @()
+    if ($null -eq $Geometry) { return ,$rings }
+    $polys = if ($Geometry.type -eq 'Polygon') { @(,$Geometry.coordinates) } elseif ($Geometry.type -eq 'MultiPolygon') { @($Geometry.coordinates) } else { @() }
+    foreach ($poly in $polys) {
+        $outer = @($poly)[0]
+        $pts = New-Object System.Collections.Generic.List[string]
+        $lastLat = 999.0; $lastLon = 999.0
+        foreach ($c in @($outer)) {
+            $lon = [double]$c[0]; $lat = [double]$c[1]
+            if ([Math]::Abs($lat - $lastLat) + [Math]::Abs($lon - $lastLon) -lt 0.004) { continue }
+            $pts.Add(('{0},{1}' -f $lat.ToString('0.####', $inv), $lon.ToString('0.####', $inv)))
+            $lastLat = $lat; $lastLon = $lon
+        }
+        if ($pts.Count -ge 3) { $rings += ,($pts -join ' ') }
+    }
+    return ,$rings
+}
+
+function Get-ZoneRings([string]$Url) {
+    $id = ($Url -split '/')[-1]
+    if ($id -notmatch '^[A-Z]{2}[CZ]\d{3}$') { return @() }
+    $file = Join-Path $LocalDir "zone-$id.txt"
+    if ((Test-Path $file) -and ((Get-Date) - (Get-Item $file).LastWriteTime).TotalDays -lt 30) { return @(Get-Content $file) }
+    $z = Invoke-RestMethod -Uri $Url -Headers @{ 'User-Agent' = $ua; 'Accept' = 'application/geo+json' } -TimeoutSec $TimeoutSec
+    $rings = Get-Rings $z.geometry
+    if ($rings.Count -gt 0) { Write-Atomic $file $rings }
+    return $rings
+}
+
+function Get-AlertLines([double[]]$Box, [double]$Lat, [double]$Lon) {
+    $areaFile = Join-Path $LocalDir 'alert-area.txt'
+    $area = if (Test-Path $areaFile) { (Get-Content $areaFile -TotalCount 1).Trim() } else { '' }
+    if ($area -notmatch '^[A-Z]{2}$') {
+        $pt = Invoke-RestMethod -Uri ('https://api.weather.gov/points/{0},{1}' -f $Lat.ToString('0.0###', $inv), $Lon.ToString('0.0###', $inv)) `
+                                -Headers @{ 'User-Agent' = $ua } -TimeoutSec $TimeoutSec
+        $area = [string]$pt.properties.relativeLocation.properties.state
+        if ($area -match '^[A-Z]{2}$') { Write-Atomic $areaFile @($area) }
+    }
+    if ($area -notmatch '^[A-Z]{2}$') { return @() }
+    $r = Invoke-RestMethod -Uri "https://api.weather.gov/alerts/active?area=$area" -Headers @{ 'User-Agent' = $ua; 'Accept' = 'application/geo+json' } -TimeoutSec $TimeoutSec
+    $s = $Box[0] - 1; $w = $Box[1] - 1; $n = $Box[2] + 1; $e = $Box[3] + 1
+    $lines = New-Object System.Collections.Generic.List[string]
+    $k = 0
+    foreach ($f in @($r.features)) {
+        $p = $f.properties
+        $event = ([string]$p.event -replace '\s+', ' ').Trim()
+        if ($p.status -ne 'Actual' -or $p.messageType -eq 'Cancel' -or -not $event) { continue }
+        if ($event -match 'Statement|Outlook|Short Term Forecast|Test|Message') { continue }
+        $rings = if ($f.geometry) { Get-Rings $f.geometry } else { @(@($p.affectedZones) | ForEach-Object { try { Get-ZoneRings $_ } catch { } }) }
+        $near = @($rings | Where-Object {
+            $in = $false
+            foreach ($pair in ($_ -split ' ')) { $ll = $pair -split ','; $a = [double]$ll[0]; $o = [double]$ll[1]; if ($a -gt $s -and $a -lt $n -and $o -gt $w -and $o -lt $e) { $in = $true; break } }
+            $in })
+        if ($near.Count -eq 0) { continue }
+        $level = if ($event -match 'Warning$') { 2 } else { 1 }
+        $ends = $p.ends; if (-not $ends) { $ends = $p.expires }
+        $endsTxt = if ($ends) { (ConvertTo-Start $ends).UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ssZ', $inv) } else { '-' }
+        $k++
+        $lines.Add(('alert {0} {1} {2} {3}' -f $k, $level, $endsTxt, $event))
+        foreach ($ring in $near) { $lines.Add(('alertring {0} {1}' -f $k, $ring)) }
+    }
+    return $lines
+}
+
+# Earthquakes of magnitude 2.5 and up over the last three days from the USGS feed, within about 3 degrees of
+# the map's box (the curtain draws those on the map and lists strong ones nearby). quake UTC LAT LON MAG
+function Get-QuakeLines([double[]]$Box) {
+    $q = Invoke-RestMethod -Uri 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/2.5_week.geojson' -Headers @{ 'User-Agent' = $ua } -TimeoutSec $TimeoutSec
+    $since = [DateTimeOffset]::UtcNow.AddDays(-3)
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($f in @($q.features)) {
+        $c = $f.geometry.coordinates
+        $lat = [double]$c[1]; $lon = [double]$c[0]
+        if ($lat -lt $Box[0] - 3 -or $lat -gt $Box[2] + 3 -or $lon -lt $Box[1] - 3 -or $lon -gt $Box[3] + 3) { continue }
+        $t = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$f.properties.time)
+        if ($t -lt $since) { continue }
+        $lines.Add(('quake {0} {1} {2} {3}' -f $t.UtcDateTime.ToString('yyyy-MM-ddTHH:mm:ssZ', $inv), $lat.ToString('0.###', $inv), $lon.ToString('0.###', $inv),
+                    ([double]$f.properties.mag).ToString('0.0', $inv)))
+    }
+    return $lines
+}
+
 function Update-Map {
     try { [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12 } catch {}
     $center = Get-MapCenter
@@ -611,6 +724,10 @@ function Update-Map {
     # Station temperatures and wind; the tide.
     try { $stations = Get-StationLines $box }
     catch { Write-Host "Station reports skipped: $($_.Exception.Message)"; $stations = Get-MapEntries 'station' }
+    try { $alerts = Get-AlertLines $box $center[0] $center[1] }
+    catch { Write-Host "Alerts skipped: $($_.Exception.Message)"; $alerts = @(Get-MapEntries 'alert') + @(Get-MapEntries 'alertring') }
+    try { $quakes = Get-QuakeLines $box }
+    catch { Write-Host "Earthquakes skipped: $($_.Exception.Message)"; $quakes = Get-MapEntries 'quake' }
     try { $tides = Get-TideLines $center[0] $center[1] $boxText }
     catch { Write-Host "Tides skipped: $($_.Exception.Message)"; $tides = @(Get-MapEntries 'tidestation') + @(Get-MapEntries 'tide') }
 
@@ -620,7 +737,7 @@ function Update-Map {
     $lines.Add("base $baseName")
     if (Test-Path $waterPath) { $lines.Add("water $waterName") }
     foreach ($hk in 'waterfine', 'marsh', 'streams') { if ($hydro[$hk]) { $lines.Add("$hk $($hydro[$hk])") } }
-    foreach ($l in @($dem) + @($radar) + @($sat) + @($stations) + @($tides)) { if ($l) { $lines.Add($l) } }
+    foreach ($l in @($dem) + @($radar) + @($sat) + @($stations) + @($tides) + @($alerts) + @($quakes)) { if ($l) { $lines.Add($l) } }
     $lines.Add(('credit NOAA  {0}  USGS  {0}  {1} OpenStreetMap' -f [char]0x00B7, [char]0x00A9))
     Write-Atomic $mapFile $lines
 

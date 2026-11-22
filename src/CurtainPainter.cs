@@ -345,6 +345,7 @@ namespace ClaudeCurtain
             public Face Data;
             public List<PlacedStation> MapStations = new List<PlacedStation>();
             public TideChart MapTide;             // the tide inset (null = none)
+            public AlertPanel MapAlerts;          // the warnings and earthquakes inset (null = none)
             public bool HasMedia;                 // what is playing, beside the clock (see AddMedia)
             public float MediaLeft, MediaBaseline, BarLeft, BarRight, BarY, BarH, MediaGap;
             public string MediaTitle = "";
@@ -382,6 +383,22 @@ namespace ClaudeCurtain
         /// One row of the tide inset: "LOW", "11:57 PM", "1.3 ft", "−6.1" (the change since the high or low
         /// before). The first row is "TIDE", the curve instead of a time, the height now, and ↑ or ↓.
         /// </summary>
+        /// <summary>The warnings and earthquakes inset: a row each, a swatch, what, and when (and where, if off the map).</summary>
+        internal sealed class AlertPanel
+        {
+            public RectangleF Panel;
+            public float SwatchX, TextX, SideRight, Swatch;
+            public readonly List<AlertRow> Rows = new List<AlertRow>();
+        }
+
+        internal sealed class AlertRow
+        {
+            public Color Color;
+            public bool Quake;        // a ring, not a square
+            public string Text = "", Side = "";
+            public float Baseline;
+        }
+
         internal sealed class TideRow
         {
             public string Label = "", Time = "", Height = "", Change = "";
@@ -455,7 +472,8 @@ namespace ClaudeCurtain
         private static readonly Regex WeatherHead = new Regex(@"^(?<place>.+?)\s+forecast\s*\(as of (?<asof>[^)]+)\)\s*$", RegexOptions.IgnoreCase);
         private static readonly Regex WeatherRow = new Regex(
             @"^(?<day>[^:]+):\s+(?:Hi\s+(?<hi>-?\d+\S?))?\s*/?\s*(?:Lo\s+(?<lo>-?\d+\S?))?\s+(?<desc>.+?)(?:\s+\((?<pop>\d+)% precip\))?" +
-            @"(?:\s+\[wind (?<wind>\d+) mph at (?<wat>[^,\]]+?)(?:, gusts (?<gust>\d+))?\])?\s*$",
+            @"(?:\s+\[wind (?<wind>\d+) mph at (?<wat>[^,\]]+?)(?:, gusts (?<gust>\d+))?\])?" +
+            @"(?:\s+\[(?:hi (?<hat>\d{1,2} [AP]M))?(?:,\s*)?(?:lo (?<lot>\d{1,2} [AP]M))?\])?\s*$",
             RegexOptions.IgnoreCase);
 
         /// <summary>Lays the composition out at the largest scale that leaves room for the drift.</summary>
@@ -779,6 +797,7 @@ namespace ClaudeCurtain
                                                                          band + pad * 0.5f, taken, WeatherMap.MaxStations);
             string tideKey = PlaceTide(m, L, map.Tide, mw, mh, s.Now, pad, band, taken, pick(),
                                        r => WeatherMap.WaterShare(map, crop, mw, mh, r));
+            string alertKey = PlaceAlerts(m, L, map, crop, mw, mh, s.Now, s.Lat, s.Lon, pad, band, taken);
             L.MapStations = pick();
             StringBuilder labels = new StringBuilder();
             foreach (PlacedStation p in L.MapStations)
@@ -787,7 +806,122 @@ namespace ClaudeCurtain
             L.MapOverlayKey = (radar ? "radar" : "clouds") + "|" + L.MapFrames.Length.ToString(CultureInfo.InvariantCulture) + "|" + map.Credit + "|" +
                               L.MapHome.X.ToString("0.0", CultureInfo.InvariantCulture) + "," + L.MapHome.Y.ToString("0.0", CultureInfo.InvariantCulture) + "|" +
                               fLabel.Font.Size.ToString("0.00", CultureInfo.InvariantCulture) + "|" + unit.ToString("0.00", CultureInfo.InvariantCulture) + "|" +
-                              labels + "|" + tideKey;
+                              labels + "|" + tideKey + "|" + alertKey;
+        }
+
+        /// <summary>
+        /// The warnings and earthquakes inset (2026-11-21), in the top corner the tide leaves free: the National
+        /// Weather Service's alerts whose areas reach the map (warnings first, then watches and advisories, each
+        /// event once, with when it ends), and earthquakes: from magnitude 3 on the map in the last day, from 4
+        /// within 300 km in the last three days, with how far and which way when off the map. At most four
+        /// rows. Returns a key for what it shows ("-" when nothing, or no room).
+        /// </summary>
+        private static string PlaceAlerts(Graphics m, Layout L, WeatherMap map, GeoBox crop, int mw, int mh, DateTime nowLocal,
+                                          double lat, double lon, float pad, float band, List<RectangleF> taken)
+        {
+            L.MapAlerts = null;
+            if (double.IsNaN(lat) || double.IsNaN(lon)) { lat = (crop.North + crop.South) / 2; lon = (crop.West + crop.East) / 2; }
+            DateTime now = nowLocal.ToUniversalTime();
+            AlertPanel a = new AlertPanel();
+            List<string> seen = new List<string>();
+            List<MapAlert> alerts = new List<MapAlert>(map.Alerts);
+            alerts.Sort((x, y) => x.Level != y.Level ? y.Level.CompareTo(x.Level) : x.EndsUtc.CompareTo(y.EndsUtc));
+            List<AlertRow> warnings = new List<AlertRow>(), others = new List<AlertRow>(), quakes = new List<AlertRow>();
+            foreach (MapAlert al in alerts)
+            {
+                if (seen.Contains(al.Event) || !AlertInView(al, crop)) continue;
+                seen.Add(al.Event);
+                AlertRow row = new AlertRow { Color = al.Level >= 2 ? Wrong : Warn, Text = al.Event.ToUpperInvariant(), Side = Until(al.EndsUtc, nowLocal) };
+                (al.Level >= 2 ? warnings : others).Add(row);
+            }
+            List<MapQuake> qs = new List<MapQuake>(map.Quakes);
+            qs.Sort((x, y) => y.Mag.CompareTo(x.Mag));
+            foreach (MapQuake q in qs)
+            {
+                bool onMap = q.Lat < crop.North && q.Lat > crop.South && q.Lon > crop.West && q.Lon < crop.East;
+                double km = Km(lat, lon, q.Lat, q.Lon);
+                double hours = (now - q.Utc).TotalHours;
+                if (!((onMap && q.Mag >= 3.0 && hours <= 24) || (q.Mag >= 4.0 && km <= 300))) continue;
+                DateTime local = q.Utc.ToLocalTime();
+                string when = (local.Date == nowLocal.Date ? "" : local.ToString("ddd ", CultureInfo.InvariantCulture)) +
+                              local.ToString("h:mm tt", CultureInfo.InvariantCulture);
+                string where = onMap ? "" : (5 * Math.Round(km / 5)).ToString("0", CultureInfo.InvariantCulture) + " KM " + Compass(lat, lon, q.Lat, q.Lon) + "   \u00B7   ";
+                quakes.Add(new AlertRow { Color = Primary, Quake = true, Text = "M" + q.Mag.ToString("0.0", CultureInfo.InvariantCulture) + " EARTHQUAKE",
+                                          Side = (where + when).ToUpperInvariant() });
+                if (quakes.Count >= 2) break;
+            }
+            a.Rows.AddRange(warnings);
+            a.Rows.AddRange(quakes);
+            a.Rows.AddRange(others);
+            if (a.Rows.Count > 4) a.Rows.RemoveRange(4, a.Rows.Count - 4);
+            if (a.Rows.Count == 0) return "-";
+
+            Face f = L.Tiny;
+            float track = L.TinyTrack;
+            Func<double, float> st = k => (float)Math.Round(L.Unit * ClockPerUnit / Math.Pow(Phi, k));
+            float textW = 0, sideW = 0;
+            foreach (AlertRow r in a.Rows)
+            {
+                textW = Math.Max(textW, Measure(m, r.Text, f.Font, track));
+                sideW = Math.Max(sideW, Measure(m, r.Side, f.Font, track));
+            }
+            float padX = st(7), padY = st(7.5), gap = st(6), pitch = f.CapHeight + st(7.5);
+            a.Swatch = (float)Math.Round(f.CapHeight);
+            float panelW = (float)Math.Ceiling(padX + a.Swatch + st(7.5) + textW + gap + sideW + padX);
+            float panelH = (float)Math.Ceiling(padY + f.CapHeight + pitch * (a.Rows.Count - 1) + padY);
+            if (panelW + 2 * pad > mw) return "-";
+            RectangleF east = new RectangleF(mw - pad - panelW, pad, panelW, panelH), west = new RectangleF(pad, pad, panelW, panelH);
+            bool tideWest = L.MapTide != null && L.MapTide.Panel.Left < mw / 2f;
+            RectangleF first = tideWest || L.MapTide == null ? east : west, second = first == east ? west : east;
+            if (!taken.Exists(o => o.IntersectsWith(first))) a.Panel = first;
+            else if (!taken.Exists(o => o.IntersectsWith(second))) a.Panel = second;
+            else return "-";
+            a.SwatchX = a.Panel.Left + padX;
+            a.TextX = (float)Math.Round(a.SwatchX + a.Swatch + st(7.5));
+            a.SideRight = a.Panel.Right - padX;
+            for (int i = 0; i < a.Rows.Count; i++) a.Rows[i].Baseline = (float)Math.Round(a.Panel.Top + padY + f.CapHeight + pitch * i);
+            L.MapAlerts = a;
+            taken.Add(a.Panel);
+            StringBuilder key = new StringBuilder();
+            foreach (AlertRow r in a.Rows) key.Append(r.Text).Append(' ').Append(r.Side).Append(';');
+            return key.Append(a.Panel.Left.ToString("0", CultureInfo.InvariantCulture)).ToString();
+        }
+
+        /// <summary>"UNTIL 4 PM" today, "UNTIL WED 4 PM" later, "" when the end is not given.</summary>
+        internal static string Until(DateTime endsUtc, DateTime nowLocal)
+        {
+            if (endsUtc == DateTime.MinValue) return "";
+            DateTime local = endsUtc.ToLocalTime();
+            return ("UNTIL " + (local.Date == nowLocal.Date ? "" : local.ToString("ddd ", CultureInfo.InvariantCulture)) +
+                    local.ToString("h tt", CultureInfo.InvariantCulture)).ToUpperInvariant();
+        }
+
+        internal static bool AlertInView(MapAlert a, GeoBox crop)
+        {
+            foreach (PointF[] ring in a.Rings)
+            {
+                float s = float.MaxValue, n = float.MinValue, w = float.MaxValue, e = float.MinValue;
+                foreach (PointF p in ring) { s = Math.Min(s, p.Y); n = Math.Max(n, p.Y); w = Math.Min(w, p.X); e = Math.Max(e, p.X); }
+                if (n > crop.South && s < crop.North && e > crop.West && w < crop.East) return true;
+            }
+            return false;
+        }
+
+        internal static double Km(double lat1, double lon1, double lat2, double lon2)
+        {
+            double r = Math.PI / 180, dLat = (lat2 - lat1) * r, dLon = (lon2 - lon1) * r;
+            double h = Math.Sin(dLat / 2) * Math.Sin(dLat / 2) + Math.Cos(lat1 * r) * Math.Cos(lat2 * r) * Math.Sin(dLon / 2) * Math.Sin(dLon / 2);
+            return 6371 * 2 * Math.Atan2(Math.Sqrt(h), Math.Sqrt(1 - h));
+        }
+
+        /// <summary>Which way from the first place to the second, as one of eight compass points.</summary>
+        internal static string Compass(double lat1, double lon1, double lat2, double lon2)
+        {
+            double r = Math.PI / 180;
+            double y = Math.Sin((lon2 - lon1) * r) * Math.Cos(lat2 * r);
+            double x = Math.Cos(lat1 * r) * Math.Sin(lat2 * r) - Math.Sin(lat1 * r) * Math.Cos(lat2 * r) * Math.Cos((lon2 - lon1) * r);
+            double deg = (Math.Atan2(y, x) / r + 360) % 360;
+            return new[] { "N", "NE", "E", "SE", "S", "SW", "W", "NW" }[(int)Math.Round(deg / 45) % 8];
         }
 
         /// <summary>
@@ -999,7 +1133,10 @@ namespace ClaudeCurtain
             }
             float haloW = Math.Max(1.5f, l.Unit / 75f);
             float lineGap = (float)Math.Round(l.Unit * 0.07f);
+            DrawAlertAreas(og, l, mw, mh);
+            DrawQuakes(og, l, mw, mh, haloW);
             if (l.MapTide != null) DrawTide(og, l, l.MapTide);
+            if (l.MapAlerts != null) DrawAlertPanel(og, l, l.MapAlerts);
             // Temperatures, and wind where it blows 10 mph or more: an arrow the way it blows, then its speed.
             foreach (PlacedStation ps in l.MapStations)
             {
@@ -1030,6 +1167,81 @@ namespace ClaudeCurtain
         /// body tone, heights brightest; in the first row the day's curve, drawn like the system graphs (the
         /// hours gone fainter than the coming ones, now a bright dot).
         /// </summary>
+        /// <summary>
+        /// The alerts' areas: a fine outline in the alert's colour (coral for a warning, amber otherwise) and the
+        /// faintest wash inside, so the map stays readable under them. Warnings are drawn over the rest.
+        /// </summary>
+        private static void DrawAlertAreas(Graphics og, Layout l, int mw, int mh)
+        {
+            GeoBox c = l.MapCrop;
+            List<MapAlert> alerts = new List<MapAlert>(l.MapData.Alerts);
+            alerts.Sort((x, y) => x.Level.CompareTo(y.Level));
+            float lw = Math.Max(1.2f, l.Unit / 95f);
+            foreach (MapAlert a in alerts)
+            {
+                Color col = a.Level >= 2 ? Wrong : Warn;
+                using (SolidBrush wash = new SolidBrush(Color.FromArgb(a.Level >= 2 ? 16 : 10, col)))
+                using (Pen pen = new Pen(Color.FromArgb(170, col), lw) { LineJoin = LineJoin.Round })
+                {
+                    foreach (PointF[] ring in a.Rings)
+                    {
+                        PointF[] px = new PointF[ring.Length];
+                        for (int i = 0; i < ring.Length; i++)
+                            px[i] = new PointF((float)((ring[i].X - c.West) / (c.East - c.West) * mw), (float)((c.North - ring[i].Y) / (c.North - c.South) * mh));
+                        og.FillPolygon(wash, px);
+                        og.DrawPolygon(pen, px);
+                    }
+                }
+            }
+        }
+
+        /// <summary>Earthquakes of the last three days on the map: a ring sized by magnitude, fading with age; from M3.5 its magnitude.</summary>
+        private static void DrawQuakes(Graphics og, Layout l, int mw, int mh, float haloW)
+        {
+            GeoBox c = l.MapCrop;
+            DateTime now = DateTime.UtcNow;
+            foreach (MapQuake q in l.MapData.Quakes)
+            {
+                float x = (float)((q.Lon - c.West) / (c.East - c.West) * mw), y = (float)((c.North - q.Lat) / (c.North - c.South) * mh);
+                if (x < 0 || y < 0 || x > mw || y > mh) continue;
+                float age = (float)Math.Max(0, Math.Min(1, (now - q.Utc).TotalHours / (WeatherMap.QuakeDays * 24)));
+                float r = l.Unit * (0.035f + 0.03f * (float)Math.Max(0, q.Mag - 2.5));
+                float lw = Math.Max(1.3f, l.Unit / 85f);
+                int alpha = (int)Math.Round(255 * (1 - 0.6f * age));
+                using (Pen halo = new Pen(Color.FromArgb(alpha * 2 / 3, 0, 0, 0), lw + 2 * Math.Max(1f, haloW * 0.6f)))
+                    og.DrawEllipse(halo, x - r, y - r, 2 * r, 2 * r);
+                using (Pen ring = new Pen(Color.FromArgb(alpha, Primary), lw))
+                    og.DrawEllipse(ring, x - r, y - r, 2 * r, 2 * r);
+                if (q.Mag >= 3.5)
+                    HaloString(og, "M" + q.Mag.ToString("0.0", CultureInfo.InvariantCulture), l.Small, Color.FromArgb(alpha, Secondary),
+                               x + r + l.Unit * 0.03f, y + l.Small.CapHeight / 2f, haloW);
+            }
+        }
+
+        /// <summary>The warnings and earthquakes inset: a dark ground like the tide's, a swatch, what, and when.</summary>
+        private static void DrawAlertPanel(Graphics og, Layout l, AlertPanel a)
+        {
+            Face f = l.Tiny;
+            using (SolidBrush ground = new SolidBrush(Color.FromArgb(200, 0, 0, 0)))
+                og.FillRectangle(ground, a.Panel);
+            foreach (AlertRow r in a.Rows)
+            {
+                float top = (float)Math.Round(r.Baseline - f.Ascent);
+                RectangleF sw = new RectangleF(a.SwatchX, r.Baseline - a.Swatch, a.Swatch, a.Swatch);
+                if (r.Quake)
+                {
+                    using (Pen ring = new Pen(r.Color, Math.Max(1.2f, a.Swatch / 7f)))
+                        og.DrawEllipse(ring, sw.X + 0.5f, sw.Y + 0.5f, sw.Width - 1, sw.Height - 1);
+                }
+                else
+                {
+                    using (SolidBrush b = new SolidBrush(r.Color)) og.FillRectangle(b, sw.X, sw.Y + sw.Height * 0.15f, sw.Width, sw.Height * 0.7f);
+                }
+                DrawText(og, r.Text, f.Font, Secondary, a.TextX, top, l.TinyTrack, 0);
+                DrawText(og, r.Side, f.Font, Tertiary, (float)Math.Round(a.SideRight - Measure(og, r.Side, f.Font, l.TinyTrack)), top, l.TinyTrack, 0);
+            }
+        }
+
         private static void DrawTide(Graphics og, Layout l, TideChart t)
         {
             Face fl = l.Tiny, fs = l.Tiny;
@@ -1258,6 +1470,8 @@ namespace ClaudeCurtain
                     rm.Groups["wind"].Success ? rm.Groups["wind"].Value : "",
                     rm.Groups["wat"].Success ? rm.Groups["wat"].Value.Trim() : "",
                     rm.Groups["gust"].Success ? rm.Groups["gust"].Value : "",
+                    rm.Groups["hat"].Success ? rm.Groups["hat"].Value : "",
+                    rm.Groups["lot"].Success ? rm.Groups["lot"].Value : "",
                 });
             }
             HourPoint[] hours = NextHours(s.Hourly, s.Now, 6);
@@ -1272,7 +1486,7 @@ namespace ClaudeCurtain
                 float icon = (float)Math.Round(fData.CapHeight + line2);
                 float tx = icon + gx * 0.75f;
                 float drop = (float)Math.Round(fData.CapHeight * 0.95f);
-                float dayW = Measure(m, "WEDNESDAY", fLabel.Font, track);
+                float dayW = Measure(m, "TONIGHT", fLabel.Font, track);   // day names short since 2026-11-21 ("WEDNESDAY" before), for the times
                 float tempW = Measure(m, "-99°", fData.Font, 0);
                 float popW = drop * 0.62f + gx * 0.25f + Measure(m, "100%", fData.Font, 0);
                 float rowW = tx + dayW + gx + tempW + gx * 0.6f + tempW + gx + popW;
@@ -1384,13 +1598,30 @@ namespace ClaudeCurtain
                         string[] r = wx[i];
                         bool night = r[0].IndexOf("night", StringComparison.OrdinalIgnoreCase) >= 0;
                         ops.Add(new Op { Kind = 3, Text = Symbol(r[3], night), X = ox, Y = (float)Math.Round(y - fData.CapHeight), W = icon, H = icon, Color = Secondary });
-                        string day = r[0].ToUpperInvariant();
+                        string day = ShortDay(r[0]);
                         Op dayOp = AddTextOp(ops, day, fLabel, Tertiary, ox + tx, y, track);
                         if (Measure(m, day, fLabel.Font, track) > dayW) dayOp.W = dayW;   // an unexpected long name is cut, not allowed to push
+                        // The high and the low (2026-11-21): a small triangle up or down instead of a column of its own,
+                        // the temperature, and in small type the hour it comes, when there is room for the hours.
+                        float tri = (float)Math.Round(fData.CapHeight * 0.52f), triGap = (float)Math.Round(gx * 0.22f);
+                        float timeW = Measure(m, "12 PM", fSmall.Font, 0), timeGap = (float)Math.Round(gx * 0.28f);
+                        float plainCell = tri + triGap + tempW;
                         float hx = ox + tx + dayW + gx;
-                        if (r[1].Length > 0) AddText(ops, m, r[1], fData, Primary, hx + tempW - Measure(m, r[1], fData.Font, 0), y, 0);
-                        float lx = hx + tempW + gx * 0.6f;
-                        if (r[2].Length > 0) AddText(ops, m, r[2], fData, Secondary, lx + tempW - Measure(m, r[2], fData.Font, 0), y, 0);
+                        float windNeed = Math.Max(fData.CapHeight * 1.3f + Measure(m, "99 mph", fData.Font, 0),
+                                                  Measure(m, "12 PM", fSmall.Font, 0) + fSmall.CapHeight * 1.6f + Measure(m, "99", fSmall.Font, 0));
+                        bool withTimes = (r[8].Length > 0 || r[9].Length > 0) &&
+                                         hx + 2 * (plainCell + timeGap + timeW) + gx * 0.6f + gx + windNeed <= ox + w - popW - gx * 0.5f;
+                        float cellW = plainCell + (withTimes ? timeGap + timeW : 0);
+                        float lx = hx + cellW + gx * 0.6f;
+                        Action<float, string, string, bool, Color> temp = (cx, value, at, up, colour) =>
+                        {
+                            if (value.Length == 0) return;
+                            ops.Add(new Op { Kind = 10, Text = up ? "up" : "down", X = cx, Y = (float)Math.Round(y - fData.CapHeight / 2f - tri / 2f), W = tri, H = tri, Color = Tertiary });
+                            AddText(ops, m, value, fData, colour, cx + tri + triGap + tempW - Measure(m, value, fData.Font, 0), y, 0);
+                            if (withTimes && at.Length > 0) AddText(ops, m, at, fSmall, Tertiary, cx + plainCell + timeGap, y, 0);
+                        };
+                        temp(hx, r[1], r[8], true, Primary);
+                        temp(lx, r[2], r[9], false, Secondary);
                         if (r[4].Length > 0)
                         {
                             float pw = Measure(m, r[4], fData.Font, 0);
@@ -1402,21 +1633,34 @@ namespace ClaudeCurtain
                         float descRight = ox + w;
                         if (r[5].Length > 0)
                         {
-                            // The day's peak wind, in the room between the low and the rain: the speed, and under
-                            // it when it peaks and the strongest gust. It takes only room that is free, so it
-                            // never moves anything; amber from 20 mph, or gusts from 30.
-                            float wx0 = lx + tempW + gx;
+                            // The day's peak wind, in the room between the low and the rain: a wind symbol and the
+                            // speed, and under it the hour it peaks and, by a pennant, the strongest gust (symbols
+                            // instead of the words "peak" and "gusts" since 2026-11-21). It takes only room that is
+                            // free, so it never moves anything; amber from 20 mph, or gusts from 30.
+                            float wx0 = lx + cellW + gx;
                             float room = ox + w - popW - gx * 0.5f - wx0;
+                            float glyph = (float)Math.Round(fData.CapHeight * 1.15f), glyphGap = (float)Math.Round(gx * 0.2f);
                             string speed = r[5] + " mph";
                             int sp, gu;
-                            bool windy = (int.TryParse(r[5], out sp) && sp >= WindyMph) || (int.TryParse(r[7], out gu) && gu >= WindyGustMph);
-                            string when = "peak " + r[6] + (r[7].Length > 0 ? "  \u00B7  gusts " + r[7] : "");
-                            if (Measure(m, when, fSmall.Font, 0) > room) when = "peak " + r[6];
-                            if (Measure(m, when, fSmall.Font, 0) > room) when = "";
-                            if (Measure(m, speed, fData.Font, 0) <= room)
+                            bool gusty = int.TryParse(r[7], out gu) && gu >= WindyGustMph;
+                            bool windy = (int.TryParse(r[5], out sp) && sp >= WindyMph) || gusty;
+                            float speedW = glyph + glyphGap + Measure(m, speed, fData.Font, 0);
+                            float pennant = (float)Math.Round(fSmall.CapHeight * 1.25f);
+                            float whenW = Measure(m, r[6], fSmall.Font, 0);
+                            float gustW = r[7].Length > 0 ? timeGap * 2 + pennant + glyphGap + Measure(m, r[7], fSmall.Font, 0) : 0;
+                            if (speedW <= room)
                             {
-                                AddText(ops, m, speed, fData, windy ? Warn : Secondary, wx0, y, 0);
-                                if (when.Length > 0) AddText(ops, m, when, fSmall, Tertiary, wx0, y + line2, 0);
+                                ops.Add(new Op { Kind = 10, Text = "wind", X = wx0, Y = (float)Math.Round(y - fData.CapHeight / 2f - glyph / 2f), W = glyph, H = glyph, Color = windy ? Warn : Tertiary });
+                                AddText(ops, m, speed, fData, windy ? Warn : Secondary, wx0 + glyph + glyphGap, y, 0);
+                                float y2 = y + line2, lx2 = wx0 + glyph + glyphGap;
+                                float room2 = ox + w - wx0;   // the rain takes only the first line, so the second runs to the edge
+                                if (lx2 - wx0 + whenW <= room2) AddText(ops, m, r[6], fSmall, Tertiary, lx2, y2, 0);
+                                if (gustW > 0 && lx2 - wx0 + whenW + gustW <= room2)
+                                {
+                                    float gx0 = lx2 + whenW + timeGap * 2;
+                                    ops.Add(new Op { Kind = 10, Text = "gust", X = gx0, Y = (float)Math.Round(y2 - fSmall.CapHeight * 1.12f), W = pennant, H = (float)Math.Round(fSmall.CapHeight * 1.12f), Color = gusty ? Warn : Tertiary });
+                                    AddText(ops, m, r[7], fSmall, gusty ? Warn : Secondary, gx0 + pennant + glyphGap, y2, 0);
+                                }
                                 descRight = wx0 - gx * 0.5f;
                             }
                         }
@@ -1449,6 +1693,16 @@ namespace ClaudeCurtain
                 return capturedText;
             }
             finally { capturedText = null; }
+        }
+
+        /// <summary>A day's name, short: TODAY, TONIGHT, or the weekday's first three letters (WED NIGHT).</summary>
+        internal static string ShortDay(string day)
+        {
+            string d = (day ?? "").Trim().ToUpperInvariant();
+            if (d == "TODAY" || d == "TONIGHT") return d;
+            string[] words = d.Split(new[] { ' ' }, StringSplitOptions.RemoveEmptyEntries);
+            if (words.Length > 0 && words[0].Length > 3 && words[0].EndsWith("DAY")) words[0] = words[0].Substring(0, 3);
+            return string.Join(" ", words);
         }
 
         public const int WindyMph = 20;       // a day's peak wind from here (or gusts from WindyGustMph) shows in amber
@@ -1799,7 +2053,42 @@ namespace ClaudeCurtain
                     Bitmap pic = op.Picture != null ? op.Picture() : null;
                     if (pic != null) g.DrawImageUnscaled(pic, (int)Math.Round(ox + op.X), (int)Math.Round(oy + op.Y));
                     break;
+                case 10:
+                    DrawGlyph(g, op.Text, new RectangleF(ox + op.X, oy + op.Y, op.W, op.H), op.Color);
+                    break;
             }
+        }
+
+        /// <summary>
+        /// The forecast's small symbols: a triangle up for the high and down for the low, the wind symbol for the
+        /// peak wind, and a pennant on its pole for the gusts (the meteorologist's mark for strong wind).
+        /// </summary>
+        internal static void DrawGlyph(Graphics g, string kind, RectangleF b, Color c)
+        {
+            SmoothingMode was = g.SmoothingMode;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            using (SolidBrush brush = new SolidBrush(c))
+            using (Pen pen = new Pen(c, Math.Max(1.2f, b.Height / 9f)) { StartCap = LineCap.Round, EndCap = LineCap.Round })
+            {
+                switch (kind)
+                {
+                    case "up":
+                        g.FillPolygon(brush, new[] { new PointF(b.Left, b.Bottom), new PointF(b.Right, b.Bottom), new PointF(b.Left + b.Width / 2f, b.Top) });
+                        break;
+                    case "down":
+                        g.FillPolygon(brush, new[] { new PointF(b.Left, b.Top), new PointF(b.Right, b.Top), new PointF(b.Left + b.Width / 2f, b.Bottom) });
+                        break;
+                    case "wind":
+                        DrawSymbol(g, "wind", b, c);
+                        break;
+                    case "gust":
+                        float pole = b.Left + pen.Width / 2f;
+                        g.DrawLine(pen, pole, b.Top, pole, b.Bottom);
+                        g.FillPolygon(brush, new[] { new PointF(pole, b.Top), new PointF(b.Right, b.Top + b.Height * 0.27f), new PointF(pole, b.Top + b.Height * 0.54f) });
+                        break;
+                }
+            }
+            g.SmoothingMode = was;
         }
 
         internal static void DrawText(Graphics g, string text, Font font, Color color, float x, float top, float tracking, float maxWidth)

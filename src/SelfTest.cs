@@ -419,7 +419,7 @@ namespace ClaudeCurtain
                 big.Weather = new[]
                 {
                     "Anytown forecast  (as of 12:59 PM)",
-                    "Wednesday:  Hi 105° / Lo -9°   Chance Showers And Thunderstorms Then Patchy Blowing Dust  (100% precip)  [wind 199 mph at 12 PM, gusts 299]",
+                    "Wednesday:  Hi 105° / Lo -9°   Chance Showers And Thunderstorms Then Patchy Blowing Dust  (100% precip)  [wind 199 mph at 12 PM, gusts 299]  [hi 12 PM, lo 12 AM]",
                     "Thursday:  Hi 99° / Lo 88°   Sunny  (100% precip)",
                     "Saturday:  Hi 99° / Lo 88°   Sunny",
                 };
@@ -455,7 +455,7 @@ namespace ClaudeCurtain
                 Options po = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") };
                 DisplayState calm = CurtainPreview.Sample(po, "idle"), windy = CurtainPreview.Sample(po, "idle"), none = CurtainPreview.Sample(po, "idle");
                 string head = "Anytown forecast  (as of 9:05 AM)";
-                calm.Weather = new[] { head, "Today:  Hi 70° / Lo 50°   Partly Sunny  (2% precip)  [wind 8 mph at 3 PM, gusts 14]" };
+                calm.Weather = new[] { head, "Today:  Hi 70° / Lo 50°   Partly Sunny  (2% precip)  [wind 8 mph at 3 PM, gusts 14]  [hi 2 PM, lo 5 AM]" };
                 windy.Weather = new[] { head, "Today:  Hi 70° / Lo 50°   Partly Sunny  (2% precip)  [wind 8 mph at 3 PM, gusts 34]" };
                 none.Weather = new[] { head, "Today:  Hi 70° / Lo 50°   Partly Sunny  (2% precip)" };
                 Func<DisplayState, List<string>> texts = st =>
@@ -465,7 +465,12 @@ namespace ClaudeCurtain
                     return t;
                 };
                 List<string> tc = texts(calm), tw = texts(windy), tn = texts(none);
-                bool calmShown = tc.Contains("8 mph|" + CurtainPainter.Secondary.ToArgb()) && tc.Exists(t => t.StartsWith("peak 3 PM  \u00B7  gusts 14|"));
+                bool calmShown = tc.Contains("8 mph|" + CurtainPainter.Secondary.ToArgb()) && tc.Contains("3 PM|" + CurtainPainter.Tertiary.ToArgb()) &&
+                                 tc.Contains("14|" + CurtainPainter.Secondary.ToArgb()) && !tc.Exists(t => t.StartsWith("peak") || t.Contains("gusts"));
+                bool times = tc.Contains("2 PM|" + CurtainPainter.Tertiary.ToArgb()) && tc.Contains("5 AM|" + CurtainPainter.Tertiary.ToArgb());
+                Check("forecast: the high and the low show the hour they come (" + times + "), and day names are short ('" +
+                      CurtainPainter.ShortDay("Wednesday") + "', '" + CurtainPainter.ShortDay("Tonight") + "')",
+                      times && CurtainPainter.ShortDay("Wednesday") == "WED" && CurtainPainter.ShortDay("Tonight") == "TONIGHT" && CurtainPainter.ShortDay("Monday Night") == "MON NIGHT");
                 bool windyAmber = tw.Contains("8 mph|" + CurtainPainter.Warn.ToArgb());
                 bool plain = !tn.Exists(t => t.Contains(" mph|")) && tn.Contains("Partly sunny|" + CurtainPainter.Tertiary.ToArgb()) &&
                              tn.Contains("2%|" + CurtainPainter.Tertiary.ToArgb());
@@ -962,6 +967,50 @@ namespace ClaudeCurtain
                 Check("map: creeks that flow all year are told from seasonal ones (the green channel)", ym[0] == 255 && ym[1] == 0);
                 Check("map: the marsh pattern is rows of short staggered dashes",
                       MapArt.MarshDash(0, 2) && !MapArt.MarshDash(0, 3) && !MapArt.MarshDash(4, 2) && MapArt.MarshDash(4, 6) && !MapArt.MarshDash(0, 6));
+            }
+
+            // Warnings and earthquakes: read from map.txt (an ended alert dropped, an old quake too), placed in the
+            // corner the tide leaves, warnings first, a strong quake off the map with how far and which way.
+            {
+                DateTime now = new DateTime(2026, 11, 21, 18, 0, 0, DateTimeKind.Utc);
+                WeatherMap.Index ax = WeatherMap.Index.Parse(new[]
+                {
+                    "box 44.4 -123.5 45.6 -120.5",
+                    "alert 1 2 2026-11-22T00:00:00Z Coastal Flood Warning",
+                    "alertring 1 45.1,-122.5 45.2,-122.1 44.9,-122.0",
+                    "alert 2 1 2026-11-20T00:00:00Z Wind Advisory",
+                    "alertring 2 45.1,-122.5 45.2,-122.1 44.9,-122.0",
+                    "alert 3 1 - Air Quality Alert",
+                    "alertring 9 1,1 2,2 3,3",
+                    "quake 2026-11-21T15:00:00Z 45.1 -121.8 3.4",
+                    "quake 2026-11-10T15:00:00Z 45.1 -121.8 5.4",
+                    "quake 2026-11-21T15:00:00Z 45 -122 99",
+                });
+                Check("alerts: map.txt's alerts, their outlines and earthquakes are read (a ring for no known alert, a magnitude of 99 refused)",
+                      ax.Alerts.Count == 3 && ax.Alerts[1].Level == 2 && ax.Alerts[1].Rings.Count == 1 && ax.Alerts[1].Rings[0].Length == 3 &&
+                      ax.Alerts[3].EndsUtc == DateTime.MinValue && ax.Alerts[3].Rings.Count == 0 && ax.Quakes.Count == 2);
+                Check("alerts: until when reads as people say it",
+                      CurtainPainter.Until(new DateTime(2026, 11, 21, 23, 0, 0, DateTimeKind.Utc), new DateTime(2026, 11, 21, 9, 0, 0)).StartsWith("UNTIL ") &&
+                      CurtainPainter.Until(DateTime.MinValue, DateTime.Now) == "");
+                Check("alerts: distance and direction (London to Paris: about 340 km SE)",
+                      Math.Abs(CurtainPainter.Km(51.5, -0.12, 48.86, 2.35) - 343) < 5 && CurtainPainter.Compass(51.5, -0.12, 48.86, 2.35) == "SE");
+
+                Options po = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") };
+                DisplayState s = CurtainPreview.Sample(po, "radar");
+                using (CurtainPainter.Layout l = CurtainPainter.Compose(s, 2560, 1440))
+                {
+                    CurtainPainter.AlertPanel p = l.MapAlerts;
+                    bool placed = p != null && l.MapTide != null && !p.Panel.IntersectsWith(l.MapTide.Panel) &&
+                                  p.Panel.Right <= l.Map.Width + 0.5f && p.Panel.Left >= -0.5f;
+                    bool rows = p != null && p.Rows.Count == 3 && p.Rows[0].Quake && p.Rows[0].Text == "M4.7 EARTHQUAKE" && p.Rows[0].Side.Contains(" KM S") &&
+                                p.Rows[1].Quake && p.Rows[1].Text == "M3.4 EARTHQUAKE" && !p.Rows[1].Side.Contains(" KM") &&
+                                !p.Rows[2].Quake && p.Rows[2].Text == "HIGH SURF ADVISORY" && p.Rows[2].Side.StartsWith("UNTIL ");
+                    Check("alerts: the sample's quakes (the strong one off the map with how far and which way) and its surf advisory are listed in the corner the tide leaves (" +
+                          (p == null ? "none" : string.Join("; ", p.Rows.ConvertAll(r => r.Text + " " + r.Side).ToArray())) + ")", placed && rows);
+                    bool clear = true;
+                    foreach (PlacedStation ps in l.MapStations) if (p != null && ps.Box.IntersectsWith(p.Panel)) clear = false;
+                    Check("alerts: no temperature hides under the inset", clear);
+                }
             }
 
             // Elevation: terrarium pixels to metres, tiles found and stitched in the right places.
