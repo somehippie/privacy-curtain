@@ -373,16 +373,18 @@ And in the left column:
   when it ends.
 
   The close-up: on a landscape screen, in the room beside the message under the map, a map of the
-  town around home, 11.5 km tall, home 7/10 of the way across (change `DetailViewKm` and
-  `DetailWestShare` in `WeatherMap.cs` to frame it differently). It plays the map's own radar or cloud
-  pictures at the same moment of the loop, so the two always agree, the radar's 1 km cells softened by
-  a third of a cell where blown up this far so showers come out round. Its own ground is fetched once
-  per place: a box of 0.3 x 0.7 degrees around the place rounded to a tenth of a degree (more of it
-  west), at about 25 m a pixel, with the land and water map, the hydrography's water, marsh and
-  creeks, the US Census Bureau's TIGER streets (public domain; local streets a faint weave, state
-  routes and freeways a step lighter and drawn over water too, so bridges show) and zoom-12 elevation
-  (about 30 m, the relief's exaggeration eased at this scale). No label, alerts or stations: the
-  ground, the weather and home.
+  town around home, 4.6 km tall (about 25 m a pixel), home 7/10 of the way across (change
+  `DetailViewKm` and `DetailWestShare` in `WeatherMap.cs` to frame it differently). It plays the
+  map's own radar or cloud pictures at the same moment of the loop, so the two always agree, the
+  radar's 1 km cells softened by a third of a cell where blown up this far so showers come out round.
+  Its own ground is fetched once per place: a box of 0.2 x 0.4 degrees around the place rounded to a
+  tenth of a degree (more of it west), at about 12 m a pixel, with the land and water map, the
+  hydrography's water and marsh and its high-resolution creek lines (canals and ditches drawn as
+  seasonal: in a town they are mostly flood channels), the US Census Bureau's TIGER streets (public
+  domain; local streets a faint weave, state routes and freeways a step lighter and drawn over water
+  too, so bridges show) and zoom-13 elevation (about 15 m; at this scale the relief's exaggeration
+  eases and contours come every 50 m). No label, alerts or stations: the ground, the weather and
+  home. The ground is kept between refreshes while its files are unchanged.
 
   Under the weather, the **relief**: the land's shape from AWS Terrain Tiles (in the United States, USGS
   3DEP elevation; about 120 m a cell at zoom 10, about 70 tiles, 7 MB, fetched once per place), sampled

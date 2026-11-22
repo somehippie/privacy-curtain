@@ -159,7 +159,7 @@ namespace ClaudeCurtain
         public GeoBox FrameBox;                   // the box the weather pictures cover: Box, or the big map's for the close-up
         public byte[] Roads = new byte[0];        // the bigger roads (close-up only), 0 ... 255 by size, on the base grid
         public byte[] Streets = new byte[0];      // local streets, 0 ... 255, the same way
-        public const double DetailViewKm = 11.5;  // the close-up's height
+        public const double DetailViewKm = 4.6;   // the close-up's height (11.5 km at first: "too zoomed out, I'd want at least 2x or more")
         public const double DetailWestShare = 0.7; // home 7/10 of the way across: the larger part of the view west
 
         public const double StationStaleHours = 2;   // older station reports are never shown
@@ -433,12 +433,14 @@ namespace ClaudeCurtain
                 Index dx = ix.Detail;
                 if (dx != null && dx.HasBox && dx.Base != null && dx.Box.KmTall < 200)
                 {
-                    WeatherMap d = new WeatherMap { Box = dx.Box, FrameBox = m.Box, Radar = m.Radar, Sat = m.Sat };
                     try
                     {
-                        if (LoadGround(d, dir, dx))
+                        WeatherMap d = DetailGround(dir, dx);
+                        if (d != null)
                         {
-                            if (dx.DemZoom > 0) LoadDem(d, dir, dx);
+                            d.FrameBox = m.Box;
+                            d.Radar = m.Radar;
+                            d.Sat = m.Sat;
                             d.Key = d.MakeKey();
                             m.Detail = d;
                         }
@@ -452,6 +454,40 @@ namespace ClaudeCurtain
             {
                 return null;
             }
+        }
+
+        // The close-up's ground (about 3200 x 1600 cells and 70 elevation tiles) changes only with the place, while
+        // map.txt changes every few minutes with the weather: it is kept from the last load while its files are
+        // the same, so a refresh decodes only the new pictures. Never changed once built, so maps share it.
+        private static readonly object groundGate = new object();
+        private static string groundKey;
+        private static WeatherMap ground;
+
+        /// <summary>A fresh copy of the close-up's ground (the cached one while its files are unchanged), or null.</summary>
+        private static WeatherMap DetailGround(string dir, Index dx)
+        {
+            StringBuilder key = new StringBuilder(Path.GetFullPath(dir)).Append('|').Append(dx.Box).Append('|');
+            key.Append(dx.DemZoom).Append(' ').Append(dx.DemX0).Append(' ').Append(dx.DemY0).Append(' ').Append(dx.DemX1).Append(' ').Append(dx.DemY1);
+            foreach (string name in new[] { dx.Base, dx.Water, dx.WaterFine, dx.Marsh, dx.Streams, dx.Roads })
+            {
+                FileInfo fi = name != null ? new FileInfo(Path.Combine(dir, name)) : null;
+                key.Append('|').Append(name ?? "-");
+                if (fi != null && fi.Exists) key.Append('@').Append(fi.LastWriteTimeUtc.Ticks).Append('/').Append(fi.Length);
+            }
+            string k = key.ToString();
+            lock (groundGate)
+            {
+                if (ground != null && groundKey == k) return (WeatherMap)ground.MemberwiseClone();
+            }
+            WeatherMap d = new WeatherMap { Box = dx.Box };
+            if (!LoadGround(d, dir, dx)) return null;
+            if (dx.DemZoom > 0) LoadDem(d, dir, dx);
+            lock (groundGate)
+            {
+                groundKey = k;
+                ground = d;
+            }
+            return (WeatherMap)d.MemberwiseClone();
         }
 
         /// <summary>
@@ -567,7 +603,7 @@ namespace ClaudeCurtain
 
         internal static float[] StitchDem(float[][] tiles, int z, int x0, int y0, int nx, int ny, GeoBox box, out int w, out int h)
         {
-            double cell = z >= 12 ? 0.0003 : z >= 10 ? 0.00125 : 0.0025;   // about the tiles' own resolution (zoom 12: the close-up)
+            double cell = z >= 13 ? 0.00015 : z >= 12 ? 0.0003 : z >= 10 ? 0.00125 : 0.0025;   // about the tiles' own resolution (13: the close-up)
             w = Math.Max(2, Math.Min(4096, (int)Math.Round((box.East - box.West) / cell)));
             h = Math.Max(2, Math.Min(2048, (int)Math.Round((box.North - box.South) / cell)));
             double[] gxs = new double[w], gys = new double[h];
@@ -1207,6 +1243,11 @@ namespace ClaudeCurtain
                         double v = Math.Max(line, trail) * (0.45 + 1.05 * n) - 6;
                         double ahead = u > 6 && u < 40 ? 22 * Math.Max(0, Noise(ex / 4.0 + 40, ey / 4.0) - 0.74) / 0.26 : 0;   // stray showers
                         v = Math.Max(v, ahead > 0 ? 14 + ahead : 0);
+                        // and a shower that hangs over home's town all hour, as one can by the hills, waxing and
+                        // waning, so the close-up has weather in every frame
+                        double gx = homeX(xn, yn) + 2.2, gy = homeY(xn, yn) - 0.6;   // km from its middle, on the ground
+                        double shower = (30 + 6 * Math.Sin(ago / 9.0)) * Math.Exp(-(gx * gx / 3.0 + gy * gy / 1.6));
+                        if (shower > 12) v = Math.Max(v, shower);
                         fr.Values[y * rw + x] = (byte)(v >= 12 ? Math.Min(80, v) : 0);
                     }
                 }
@@ -1297,7 +1338,7 @@ namespace ClaudeCurtain
                 double mount = 1150 * Math.Exp(-(ex * ex + ey * ey) / (2 * 13.0 * 13.0)) * (0.8 + 0.4 * Noise(xn * 30, yn * 12));
                 double hills = 300 * Math.Max(0, Noise(xn * 22 + 5, yn * 11) - 0.3) * Smooth01(kmIn / 20);
                 double fx = homeX(xn, yn);
-                double foot = 560 * Smooth01((fx - 2.5) / 7.0) * Math.Exp(-Math.Pow((fx - 11) / 9.0, 2)) * (0.65 + 0.5 * Noise(xn * 60 + 9, yn * 24));
+                double foot = 560 * Smooth01((fx - 1.5) / 4.0) * Math.Exp(-Math.Pow((fx - 8) / 7.0, 2)) * (0.65 + 0.5 * Noise(xn * 60 + 9, yn * 24));
                 double ry = 0.585 - 0.12 * (xn - 0.23) + 0.03 * Math.Sin(xn * 9.0 + 0.3);
                 double valley = Math.Exp(-Math.Pow((yn - ry) * boxKmH / 7.0, 2));
                 return (ridge + mount + hills + foot + 20 * Smooth01(kmIn / 3)) * (1 - 0.88 * valley);
@@ -1319,8 +1360,8 @@ namespace ClaudeCurtain
         }
 
         /// <summary>
-        /// The sample's close-up: the same made-up place, 0.3 x 0.7 degrees around home (as the weather script cuts
-        /// the real one: more of it west) at 0.0005 degree a cell,
+        /// The sample's close-up: the same made-up place, 0.2 x 0.4 degrees around home (as the weather script cuts
+        /// the real one: more of it west) at 0.00025 degree a cell,
         /// its river, ponds and hills from the map's own functions (with gullies only seen close in), and what
         /// only the close-up shows: a town's streets on the low ground (each neighbourhood's grid at its own
         /// angle, a few parks), two freeways (one on a bridge over the river), creeks from the
@@ -1332,15 +1373,15 @@ namespace ClaudeCurtain
             double cLat = Math.Round(lat, 1), cLon = Math.Round(lon, 1);
             WeatherMap c = new WeatherMap
             {
-                Box = new GeoBox(cLat - 0.15, cLon - 0.45, cLat + 0.15, cLon + 0.25), FrameBox = m.Box, Radar = m.Radar, Sat = m.Sat,
+                Box = new GeoBox(cLat - 0.1, cLon - 0.25, cLat + 0.1, cLon + 0.15), FrameBox = m.Box, Radar = m.Radar, Sat = m.Sat,
                 BaseId = "sample-detail", DemId = "sample-detail",
             };
-            int w = 1400, h = 600;
+            int w = 1600, h = 800;
             c.BaseW = w; c.BaseH = h; c.DemW = w; c.DemH = h;
             c.Water = new byte[w * h]; c.Marsh = new byte[w * h]; c.Streams = new byte[w * h]; c.YearRound = new byte[w * h];
             c.Roads = new byte[w * h]; c.Streets = new byte[w * h]; c.Elevation = new float[w * h];
             double kmLon = KmPerDegree * Math.Cos(lat * Math.PI / 180);
-            double cell = (c.Box.KmWide / w + c.Box.KmTall / h) / 2;   // km a cell, about 0.05
+            double cell = (c.Box.KmWide / w + c.Box.KmTall / h) / 2;   // km a cell, about 0.025
             double mw = m.Box.East - m.Box.West, mh = m.Box.North - m.Box.South;
             Func<double, double, double> near = (dist, width) => Math.Max(0, 1 - dist / (cell * width));   // a line's coverage
             Func<double, double, double> gridDist = (u, step) => Math.Abs(u / step - Math.Round(u / step)) * step;
@@ -1386,8 +1427,8 @@ namespace ClaudeCurtain
                                 double wx = ex + 0.3 * (Noise(ex / 1.1 + 31, ny / 1.1) - 0.5), wy = ny + 0.3 * (Noise(ex / 1.1, ny / 1.1 + 31) - 0.5);
                                 double ang = 0.2 + 1.3 * Hash(nx0, ny0 + 101), step = 0.2 + 0.1 * Hash(nx0 + 3, ny0 + 9);
                                 double u = wx * Math.Cos(ang) + wy * Math.Sin(ang), v = -wx * Math.Sin(ang) + wy * Math.Cos(ang);
-                                double st = near(Math.Min(gridDist(u, step), gridDist(v, step * 2.2)), 0.5);
-                                c.Streets[i] = (byte)(255 * 0.6 * st * Math.Min(1, town * 6) * low);   // as thin as the real streets read
+                                double st = near(Math.Min(gridDist(u, step), gridDist(v, step * 2.2)), 0.8);
+                                c.Streets[i] = (byte)(255 * 0.45 * st * Math.Min(1, town * 6) * low);   // as thin as the real streets read
                             }
                         }
                         // marsh on the river's low banks west of town
@@ -1395,8 +1436,8 @@ namespace ClaudeCurtain
                         // creeks: one that flows all year down from the foothills, a seasonal one from the north
                         if (ny > riverNy)
                         {
-                            double yr = ny < 6.5 ? near(Math.Abs(ex - (6.5 + 1.4 * Math.Sin(ny / 2.2))), 0.8) : 0;
-                            double se = ny < 5.5 ? near(Math.Abs(ex - (-9 + 1.1 * Math.Sin(ny / 1.7 + 1))), 0.8) : 0;
+                            double yr = ny < 6.5 ? near(Math.Abs(ex - (2.4 + 0.7 * Math.Sin(ny / 1.2))), 1.2) : 0;
+                            double se = ny < 5.5 ? near(Math.Abs(ex - (-6.2 + 0.8 * Math.Sin(ny / 1.1 + 1))), 1.2) : 0;
                             c.Streams[i] = (byte)(255 * Math.Max(yr, se * 0.67));
                             c.YearRound[i] = (byte)(255 * yr);
                         }
@@ -1671,6 +1712,12 @@ namespace ClaudeCurtain
                 for (int pass = 0; pass < 2; pass++) elev = BoxBlur(elev, w, h, radius);
             }
             double mx = crop.KmWide * 1000.0 / w, my = crop.KmTall * 1000.0 / h;   // metres a pixel
+            // close in (the close-up, ~25 m a pixel), a contour every 50 m and a stronger one every 250 m
+            bool closeIn = Math.Min(mx, my) < ContourHalfBelowMetres;
+            float contour = closeIn ? ContourMetres / 2 : ContourMetres;
+            // close in, seasonal creeks and channels share the ground with every street, so they draw stronger to
+            // stay apart from them (still greyer than the year-round blue)
+            float seasonal = closeIn ? SeasonalCloseStrength : SeasonalStrength;
             // Real hills look flat at the big map's scale, so their heights are exaggerated; closer in (the
             // close-up, ~60 m a pixel) they need less, or every gully turns to grain (2026-11-21).
             double exaggeration = ReliefExaggeration * Math.Min(1.0, Math.Pow(Math.Min(mx, my) / ReliefFullAtMetres, 0.5));
@@ -1701,12 +1748,12 @@ namespace ClaudeCurtain
                         // every fifth (500 m) a little stronger, and where a slope packs the 100 m ones closer than
                         // about three pixels they fade out, so steep ground keeps only its 500 m lines
                         float slope = (float)Math.Sqrt(dE * dE + dN * dN) / 2f;   // metres a pixel
-                        if (e0 > ContourMetres * 0.5f && slope > 0.5f)
+                        if (e0 > contour * 0.5f && slope > 0.5f)
                         {
-                            float n = (float)Math.Round(e0 / ContourMetres);
+                            float n = (float)Math.Round(e0 / contour);
                             bool index = (int)n % ContourIndexEvery == 0;
-                            float off = Math.Abs(e0 - n * ContourMetres) / slope;
-                            float spacing = ContourMetres * (index ? ContourIndexEvery : 1) / slope;   // pixels to the next such line
+                            float off = Math.Abs(e0 - n * contour) / slope;
+                            float spacing = contour * (index ? ContourIndexEvery : 1) / slope;   // pixels to the next such line
                             float room = Math.Max(0f, Math.Min(1f, (spacing - 2.5f) / 2.5f));
                             float a = (1 - off / 0.85f) * (index ? ContourIndexStrength : ContourStrength) * room * Math.Min(1f, land * 1.5f);
                             if (a > 0)
@@ -1733,7 +1780,7 @@ namespace ClaudeCurtain
                         // how much of the line flows all year: a clear blue, drawn stronger; seasonal creeks a dim
                         // grey-blue (2026-11-21)
                         float f = hasYearRound ? Math.Min(1f, yearRound[i] / creek[i]) : 0f;
-                        float a = Math.Min(1f, creek[i]) * (SeasonalStrength + (YearRoundStrength - SeasonalStrength) * f) * land;
+                        float a = Math.Min(1f, creek[i]) * (seasonal + (YearRoundStrength - seasonal) * f) * land;
                         float tr = SeasonalTone.R + (YearRoundTone.R - SeasonalTone.R) * f;
                         float tg = SeasonalTone.G + (YearRoundTone.G - SeasonalTone.G) * f;
                         float tb = SeasonalTone.B + (YearRoundTone.B - SeasonalTone.B) * f;
@@ -1777,6 +1824,7 @@ namespace ClaudeCurtain
         public const float MarshStrength = 0.75f;
         public const float YearRoundStrength = 0.9f;
         public const float SeasonalStrength = 0.5f;
+        public const float SeasonalCloseStrength = 0.85f;   // the close-up's
         internal static readonly Color MarshTone = Color.FromArgb(76, 96, 116);
         internal static readonly Color YearRoundTone = Color.FromArgb(72, 118, 164);
         internal static readonly Color SeasonalTone = Color.FromArgb(86, 100, 112);
@@ -1793,6 +1841,7 @@ namespace ClaudeCurtain
         public const double ReliefExaggeration = 2.4;  // at this scale real hills look flat
         public const double ReliefFullAtMetres = 120;  // ...from this many metres a pixel; less below (the close-up)
         public const float ContourMetres = 100f;        // 200 m until 2026-11-17
+        public const double ContourHalfBelowMetres = 50; // closer than this many metres a pixel, every 50 m (the close-up)
         public const int ContourIndexEvery = 5;         // every 500 m, a little stronger
         public const float ContourStrength = 0.32f;
         public const float ContourIndexStrength = 0.5f;

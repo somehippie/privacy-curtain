@@ -493,30 +493,48 @@ function Update-Dem([double[]]$Box, [int]$Zoom = 10) {
 # Streets for the close-up: the Census Bureau's TIGER roads (public domain) as a mask, local streets in the
 # green channel and the bigger roads in the red one (state routes 170, freeways 255), drawn after the streets
 # so they win where they cross. The service draws its street layer only at close scales and works out the scale
-# from the dpi, so it is asked at 24 dpi; the line widths are in points, a pixel each at that dpi for a street.
+# from the dpi, so it is asked at 24 dpi; the line widths are in points, 3 to a pixel at that dpi: a pixel
+# (about 12 m) for a street, two for a state route, three for a freeway.
 function Get-RoadsUrl([double[]]$Box, [int]$Width, [int]$Height) {
     $layer = {
         param($id, $r, $g, $width)
         '{"id":' + $id + ',"source":{"type":"mapLayer","mapLayerId":' + $id + '},"drawingInfo":{"renderer":{"type":"simple","symbol":{"type":"esriSLS","style":"esriSLSSolid","color":[' +
             $r + ',' + $g + ',0,255],"width":' + $width + '}},"showLabels":false},"minScale":0,"maxScale":0}'
     }
-    $layers = '[' + (& $layer 8 0 255 3) + ',' + (& $layer 6 170 0 4.5) + ',' + (& $layer 2 255 0 6) + ']'
+    $layers = '[' + (& $layer 8 0 255 3) + ',' + (& $layer 6 170 0 6) + ',' + (& $layer 2 255 0 9) + ']'
     $bbox = (@($Box[1], $Box[0], $Box[3], $Box[2]) | ForEach-Object { $_.ToString('0.###', $inv) }) -join ','   # west,south,east,north
     return 'https://tigerweb.geo.census.gov/arcgis/rest/services/TIGERweb/Transportation/MapServer/export?bbox=' + $bbox + '&bboxSR=4326&imageSR=4326' +
            "&size=$Width,$Height&dpi=24&format=png32&transparent=true&dynamicLayers=" + [uri]::EscapeDataString($layers) + '&f=image'
 }
 
-# The close-up under the map (2026-11-21): a box 0.3 x 0.7 degrees (about 33 x 60 km) around the place rounded to
+# Creeks for the close-up: the high-resolution hydrography's own lines (its large-scale flowline layer, which
+# has every local creek but no stream order), at 96 dpi, two pixels wide: perennial streams full in the red
+# and green channels; intermittent ones, and canals and ditches (in a town mostly flood channels, dry much of
+# the year), full in the red channel only: seasonal, as Get-StreamsUrl encodes them, but at full size (this
+# layer has no stream order, and close in every creek reads as a creek). Ephemeral gullies and the paths drawn
+# through lakes are left out.
+function Get-StreamsFineUrl([double[]]$Box, [int]$Width, [int]$Height) {
+    $line = { param($r, $g) '{"type":"simple","symbol":{"type":"esriSLS","style":"esriSLSSolid","color":[' + $r + ',' + $g + ',255,255],"width":1.5}}' }
+    $layers = '[{"id":101,"source":{"type":"mapLayer","mapLayerId":6},"definitionExpression":"FCODE = 46006","drawingInfo":{"renderer":' + (& $line 255 255) +
+              ',"showLabels":false},"minScale":0,"maxScale":0},{"id":102,"source":{"type":"mapLayer","mapLayerId":6},"definitionExpression":"FCODE = 46003 OR FTYPE = 336","drawingInfo":{"renderer":' +
+              (& $line 255 0) + ',"showLabels":false},"minScale":0,"maxScale":0}]'
+    return Get-HydroUrl $Box $Width $Height $layers 96
+}
+
+# The close-up under the map (2026-11-21): a box 0.2 x 0.4 degrees (about 22 x 35 km) around the place rounded to
 # a tenth of a degree, like the big box, so the servers learn the area and not the address; more of it lies west
-# of the place, since the close-up shows home 7/10 of the way across (its shape needs up to 0.42 degree west of
-# home at 50 degrees north). Its own ground at
-# 0.00025 degree a pixel (about 25 m): the land and water, the hydrography's water, marsh and creeks, streets,
-# and zoom-12 elevation (about 30 m). Fetched once per place, best-effort, each part on its own. The weather on
-# it is the big map's own pictures, so the two always show the same moment. Returns its map.txt lines.
-$detailHalfLat = 0.15
-$detailWest = 0.45
-$detailEast = 0.25
-$detailCell = 0.00025
+# of the place, since the close-up shows home 7/10 of the way across (its shape needs up to 0.2 degree west of
+# home at 50 degrees north). Its own ground at 0.000125 degree a pixel (about 12 m): the land and water, the
+# hydrography's water, marsh and creeks, streets, and zoom-13 elevation (about 15 m). Fetched once per place,
+# best-effort, each part on its own. The weather on it is the big map's own pictures, so the two always show the
+# same moment. Returns its map.txt lines. (The first close-up, 11.5 km tall, had a box of 0.3 x 0.7 degrees at
+# twice the cell and zoom-12 elevation; the user found it "too zoomed out", so it shows 4.6 km since.)
+$detailHalfLat = 0.1
+$detailWest = 0.25
+$detailEast = 0.15
+$detailCell = 0.000125
+$detailDemZoom = 13
+$mapDemZoom = 10
 
 function Update-Detail([double]$CLat, [double]$CLon) {
     [double[]]$dBox = @(($CLat - $detailHalfLat), ($CLon - $detailWest), ($CLat + $detailHalfLat), ($CLon + $detailEast))
@@ -532,10 +550,10 @@ function Update-Detail([double]$CLat, [double]$CLon) {
             try {
                 $url = switch ($dk) {
                     'base'      { Get-MapUrl 'https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi' 'OSM_Land_Water_Map' $dBox $w $h 'image/png' '' }
-                    'water'     { Get-WaterUrl $dBox $w $h 96 }   # 96 dpi: the small-scale layers' own range
+                    'water'     { Get-WaterUrl $dBox $w $h 192 }   # 192 dpi: the small-scale layers' own range at this cell
                     'waterfine' { Get-WaterFineUrl $dBox $w $h }
-                    'marsh'     { Get-MarshUrl $dBox $w $h 96 }
-                    'streams'   { Get-StreamsUrl $dBox $w $h 96 }
+                    'marsh'     { Get-MarshUrl $dBox $w $h 192 }
+                    'streams'   { Get-StreamsFineUrl $dBox $w $h }
                     default     { Get-RoadsUrl $dBox $w $h }
                 }
                 Save-MapImage $url $path 90
@@ -545,7 +563,7 @@ function Update-Detail([double]$CLat, [double]$CLon) {
         if (Test-Path $path) { $lines.Add("detail $dk $name") }
     }
     if (-not ($lines | Where-Object { $_ -like 'detail base *' })) { return @() }   # no ground, no close-up
-    try { $lines.Add('detail ' + (Update-Dem $dBox 12)) } catch { Write-Host "Close-up elevation skipped: $($_.Exception.Message)" }
+    try { $lines.Add('detail ' + (Update-Dem $dBox $detailDemZoom)) } catch { Write-Host "Close-up elevation skipped: $($_.Exception.Message)" }
     return $lines.ToArray()
 }
 
@@ -768,7 +786,7 @@ function Update-Map {
     }
 
     # Elevation for the relief, once per place.
-    try { $dem = @(Update-Dem $box) }
+    try { $dem = @(Update-Dem $box $mapDemZoom) }
     catch { Write-Host "Elevation skipped: $($_.Exception.Message)"; $dem = Get-MapEntries 'dem' }
 
     # Radar: one picture every 8 minutes over the last hour, at the mosaic's own 0.01-degree grid.
@@ -792,6 +810,9 @@ function Update-Map {
     catch { Write-Host "Tides skipped: $($_.Exception.Message)"; $tides = @(Get-MapEntries 'tidestation') + @(Get-MapEntries 'tide') }
     try { $detail = @(Update-Detail $cLat $cLon) }
     catch { Write-Host "Close-up skipped: $($_.Exception.Message)"; $detail = Get-MapEntries 'detail' }
+    # elevation tiles of a zoom neither map uses any more (the first close-up's zoom 12)
+    Get-ChildItem -Path $LocalDir -Filter 'dem-*.png' | Where-Object { $_.Name -notmatch "^dem-($mapDemZoom|$detailDemZoom)-" } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
 
     $lines = New-Object System.Collections.Generic.List[string]
     $lines.Add(('# weather map for the curtain, as of {0}' -f (Get-Date -Format 't')))
