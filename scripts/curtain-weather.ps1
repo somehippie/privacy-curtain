@@ -173,6 +173,27 @@ function Get-TempTimes($Hours, $HiFrom, $HiTo, $LoFrom, $LoTo) {
     return '  [' + ($parts -join ', ') + ']'
 }
 
+# A row's hours for the curtain's graphs (2026-11-21): temperature (F), wind and gusts (mph) every hour from From
+# (on the hour) until To, as " [hours START t,t,... w,w,... g,g,...]", START the first hour (ISO 8601 with its
+# offset) and "x" for an hour the grid lacks; '' when the grid gave no temperatures for them.
+function Get-DayHours($Hours, [DateTimeOffset]$From, [DateTimeOffset]$To) {
+    $byHour = @{}
+    foreach ($h in $Hours) { $byHour[$h.At.ToString('yyyy-MM-ddTHH', $inv)] = $h }
+    $start = $From.AddMinutes(-$From.Minute).AddSeconds(-$From.Second).AddMilliseconds(-$From.Millisecond)
+    $t = New-Object System.Collections.Generic.List[string]
+    $w = New-Object System.Collections.Generic.List[string]
+    $g = New-Object System.Collections.Generic.List[string]
+    $known = 0
+    for ($at = $start; $at -lt $To -and $t.Count -lt 48; $at = $at.AddHours(1)) {
+        $h = $byHour[$at.ToLocalTime().ToString('yyyy-MM-ddTHH', $inv)]
+        if ($h -and $null -ne $h.Temp) { $t.Add(([Math]::Round($h.Temp * 9 / 5 + 32)).ToString($inv)); $known++ } else { $t.Add('x') }
+        if ($h -and $null -ne $h.Speed) { $w.Add(([Math]::Round($h.Speed)).ToString($inv)) } else { $w.Add('x') }
+        if ($h -and $null -ne $h.Gust) { $g.Add(([Math]::Round($h.Gust)).ToString($inv)) } else { $g.Add('x') }
+    }
+    if ($known -lt 2) { return '' }
+    return ('  [hours {0} {1} {2} {3}]' -f $start.ToString("yyyy-MM-dd'T'HH:mm:sszzz", $inv), ($t -join ','), ($w -join ','), ($g -join ','))
+}
+
 function Update-Daily {
     $r = Invoke-RestMethod -Uri "https://api.weather.gov/gridpoints/$Grid/forecast?units=us" `
                            -Headers @{ 'User-Agent' = $ua } -TimeoutSec $TimeoutSec
@@ -189,9 +210,15 @@ function Update-Daily {
         # the hours this row speaks for: its calendar day (from now on, for today), or tonight until 6 AM
         $from = ConvertTo-Start $p.startTime
         $day = [DateTimeOffset]::new($from.LocalDateTime.Date, $from.Offset)
-        if ($p.isDaytime) { $from = $day; $to = $day.AddDays(1) } else { $to = $day.AddDays(1).AddHours(6) }
+        # a night that starts after midnight (an "Overnight" period) ends at 6 AM the same day
+        $nightEnd = if ($from.LocalDateTime.Hour -lt 6) { $day.AddHours(6) } else { $day.AddDays(1).AddHours(6) }
+        if ($p.isDaytime) { $from = $day; $to = $day.AddDays(1) } else { $to = $nightEnd }
         if ($from -lt $now) { $from = $now.AddMinutes(-$now.Minute).AddSeconds(-$now.Second) }
         $windTxt = Get-WindPeak $windHours $from $to
+        # the hours the curtain graphs: from 6 AM (or now) to 6 AM the next morning, or for a night from its start
+        $hoursFrom = if ($p.isDaytime -and $from -lt $day.AddHours(6)) { $day.AddHours(6) } else { $from }
+        $hoursTo = if ($p.isDaytime) { $day.AddDays(1).AddHours(6) } else { $nightEnd }
+        $hoursTxt = Get-DayHours $windHours $hoursFrom $hoursTo
         # the high in the day's hours (even those gone by: the high is the day's), the low in the night after it
         # (tonight, for a night row)
         if ($p.isDaytime) { $timesTxt = Get-TempTimes $windHours $day.AddHours(6) $day.AddHours(21) $day.AddHours(18) $day.AddDays(1).AddHours(10) }
@@ -212,7 +239,7 @@ function Update-Daily {
         try { $pop = [int]$p.probabilityOfPrecipitation.value } catch {}
         $popTxt = if ($pop -gt 0) { "  ({0}% precip)" -f $pop } else { '' }
         if ($null -eq $hi) { $timesTxt = $timesTxt -replace 'hi [^,\]]+(, )?', '' -replace '\[\]', '' }
-        $lines.Add(("{0}:  {1}   {2}{3}{4}{5}" -f (Get-DayLabel $p), $temp, $desc, $popTxt, $windTxt, $timesTxt))
+        $lines.Add(("{0}:  {1}   {2}{3}{4}{5}{6}" -f (Get-DayLabel $p), $temp, $desc, $popTxt, $windTxt, $timesTxt, $hoursTxt))
         $shown++
     }
     Write-Atomic $out $lines

@@ -479,6 +479,42 @@ namespace ClaudeCurtain
                       calmShown && windyAmber && plain);
             }
 
+            // The days' graphs (2026-11-21): a row's hours are read (their place on the 6 AM clock, "x" for a missing
+            // hour, a malformed list refused), and a row that has them shows a temperature graph with "low–high"
+            // and a wind graph with its peak and gust, the words and the rain on the second line; a row without
+            // them keeps the symbols and hours (the tests above).
+            {
+                Func<DateTime, string> iso = when => new DateTimeOffset(when).ToString("yyyy-MM-dd'T'HH:mm:sszzz", System.Globalization.CultureInfo.InvariantCulture);
+                double off9, off2, offBad;
+                float[] t9, w9, g9, t2, w2, g2, tb, wb, gb;
+                bool ok9 = CurtainPainter.ParseSeries(iso(new DateTime(2026, 11, 21, 21, 0, 0)), "52,x,50", "7,5,x", "14,9,6", out off9, out t9, out w9, out g9);
+                bool ok2 = CurtainPainter.ParseSeries(iso(new DateTime(2026, 11, 22, 2, 0, 0)), "-3,-4", "1,2", "3,4", out off2, out t2, out w2, out g2);
+                bool bad = CurtainPainter.ParseSeries(iso(new DateTime(2026, 11, 22, 6, 0, 0)), "50,51,52", "1,2", "3,4,5", out offBad, out tb, out wb, out gb) ||
+                           CurtainPainter.ParseSeries("not a time", "50,51", "1,2", "3,4", out offBad, out tb, out wb, out gb) ||
+                           CurtainPainter.ParseSeries(iso(new DateTime(2026, 11, 22, 6, 0, 0)), "x,51", "1,2", "3,4", out offBad, out tb, out wb, out gb);
+                Check("forecast: a row's hours are read: 9 PM is 15 hours into the day from 6 AM, 2 AM 20 hours into the evening's; a missing hour is a gap; malformed hours are refused",
+                      ok9 && Math.Abs(off9 - 15) < 1e-6 && t9.Length == 3 && float.IsNaN(t9[1]) && float.IsNaN(w9[2]) && g9[0] == 14 &&
+                      ok2 && Math.Abs(off2 - 20) < 1e-6 && t2[0] == -3 && !bad);
+
+                Options po = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") };
+                DisplayState st = CurtainPreview.Sample(po, "idle");   // its rows carry their hours
+                List<string> t = new List<string>();
+                foreach (KeyValuePair<string, Color> op in CurtainPainter.TextOpsForTest(st, 2560, 1440)) t.Add(op.Key + "|" + op.Value.ToArgb());
+                Func<string, Color, bool> has = (text, c) => t.Contains(text + "|" + c.ToArgb());
+                bool temps = has("50–", CurtainPainter.Secondary) && has("70°", CurtainPainter.Primary) && has("48°", CurtainPainter.Secondary) &&
+                             has("47–", CurtainPainter.Secondary) && has("64°", CurtainPainter.Primary);
+                bool wind = has("12–21", CurtainPainter.Secondary) && has("24–37", CurtainPainter.Warn) && has(" mph", CurtainPainter.Warn) &&
+                            has(" mph", CurtainPainter.Tertiary);
+                int graphs = t.FindAll(x => x.StartsWith("[graph ")).Count;
+                bool marks = t.Exists(x => x.StartsWith("[graph high]")) && t.Exists(x => x.StartsWith("[graph low]")) &&
+                             t.Contains("[graph peak]|" + CurtainPainter.Warn.ToArgb());
+                bool calm = !t.Exists(x => x.StartsWith("5 AM|") || x.StartsWith("6 AM|") || x.StartsWith("7 AM|") || x.StartsWith("12 mph|") || x.StartsWith("24 mph|"));   // the hours of the high and low, the old speed
+                bool words = has("Chance light rain then patchy fog", CurtainPainter.Tertiary) && has("53%", CurtainPainter.Tertiary);
+                Check("forecast: with their hours, each day is a temperature graph with low–high and a wind graph with its peak and gust (amber when windy), " +
+                      "the words and the rain under them, and no hours or symbols in words (" + temps + " " + wind + " " + graphs + " graphs " + marks + " " + calm + " " + words + ")",
+                      temps && wind && graphs == 6 && marks && calm && words);
+            }
+
             // The hourly forecast file.
             {
                 HourPoint[] h = SysStats.ParseHourly(new[]

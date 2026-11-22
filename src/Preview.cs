@@ -186,12 +186,17 @@ namespace ClaudeCurtain
             try { if (o.LocalDir != null && File.Exists(wx)) lines = File.ReadAllLines(wx, Encoding.UTF8); } catch { }
             if (lines == null || lines.Length == 0)
             {
+                // the rows with their hours (the days' graphs): today from this hour, tonight from 6 PM, Monday whole
+                DateTime top = new DateTime(now.Year, now.Month, now.Day, now.Hour, 0, 0);
+                DateTime eve = now.Date.AddHours(18), mon = now.Date.AddDays(1).AddHours(6);
                 lines = new[]
                 {
                     "Anytown forecast  (as of 9:05 AM)",
-                    "Today:  Hi 70° / Lo 50°   Partly Sunny  (2% precip)  [wind 12 mph at 3 PM, gusts 21]  [hi 2 PM, lo 6 AM]",
-                    "Tonight:  Lo 48°   Mostly Clear  [wind 6 mph at 9 PM]  [lo 5 AM]",
-                    "Monday:  Hi 64° / Lo 47°   Chance Light Rain then Patchy Fog  (53% precip)  [wind 24 mph at 2 PM, gusts 38]  [hi 1 PM, lo 7 AM]",
+                    "Today:  Hi 70° / Lo 50°   Partly Sunny  (2% precip)  [wind 12 mph at 3 PM, gusts 21]  [hi 2 PM, lo 6 AM]" +
+                        SampleHours(top, (int)(now.Date.AddDays(1).AddHours(6) - top).TotalHours, 50, 70, 4, 12, 9),
+                    "Tonight:  Lo 48°   Mostly Clear  [wind 6 mph at 9 PM]  [lo 5 AM]" + SampleHours(eve, 12, 48, 61, 3, 6, 3),
+                    "Monday:  Hi 64° / Lo 47°   Chance Light Rain then Patchy Fog  (53% precip)  [wind 24 mph at 2 PM, gusts 38]  [hi 1 PM, lo 7 AM]" +
+                        SampleHours(mon, 24, 47, 64, 8, 24, 14),
                 };
             }
             s.Weather = lines;
@@ -224,6 +229,29 @@ namespace ClaudeCurtain
         }
 
         /// <summary>Twelve hours from the top of the current hour: rain moving in over the afternoon.</summary>
+        /// <summary>
+        /// A made-up row's hours, as the weather script writes them ("  [hours START t,... w,... g,...]"): the
+        /// temperature rising from its low at 6 AM to its high at 2 PM and easing back by the next dawn, the wind
+        /// building to its peak mid-afternoon, gusts above it as it rises.
+        /// </summary>
+        internal static string SampleHours(DateTime start, int count, double lo, double hi, double windLo, double windHi, double gustExtra)
+        {
+            CultureInfo inv = CultureInfo.InvariantCulture;
+            List<string> t = new List<string>(), w = new List<string>(), g = new List<string>();
+            for (int i = 0; i < count; i++)
+            {
+                double h = (start.Hour + i) % 24 + 0.5;
+                double day = h < 6 ? h + 24 : h;   // hours since midnight of the day that began at 6 AM
+                double f = day <= 14 ? 0.5 - 0.5 * Math.Cos(Math.PI * (day - 6) / 8) : 0.5 + 0.5 * Math.Cos(Math.PI * (day - 14) / 16);
+                double wind = windLo + (windHi - windLo) * Math.Exp(-Math.Pow((day - 15) / 3.5, 2));
+                t.Add(Math.Round(lo + (hi - lo) * f).ToString(inv));
+                w.Add(Math.Round(wind).ToString(inv));
+                g.Add(Math.Round(wind + gustExtra * (wind - windLo) / Math.Max(1, windHi - windLo)).ToString(inv));
+            }
+            return "  [hours " + start.ToString("yyyy-MM-dd'T'HH':00:00'zzz", inv) + " " + string.Join(",", t.ToArray()) + " " +
+                   string.Join(",", w.ToArray()) + " " + string.Join(",", g.ToArray()) + "]";
+        }
+
         internal static HourPoint[] SampleHourly(DateTime now)
         {
             int[] temp = { 58, 60, 62, 63, 63, 62, 60, 58, 57, 56, 55, 55 };

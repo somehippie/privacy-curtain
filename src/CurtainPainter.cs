@@ -414,7 +414,8 @@ namespace ClaudeCurtain
 
         private sealed class Op
         {
-            public int Kind;            // 0 text, 1 rect, 2 dot, 3 weather symbol, 4 sparkline, 5 bar, 6 droplet, 7 rain bar, 8 curve, 9 picture
+            public int Kind;            // 0 text, 1 rect, 2 dot, 3 weather symbol, 4 sparkline, 5 bar, 6 droplet, 7 rain bar, 8 curve, 9 picture,
+                                        // 10 glyph, 11 a day's graph
             public string Text;
             public Func<Bitmap> Picture;   // kind 9: drawn at (X, Y) unscaled; fetched only when the block is drawn, owned by MapArt
             public Font Font;
@@ -423,7 +424,7 @@ namespace ClaudeCurtain
             public float X, Y, W, H;    // text: left, baseline, max width (0 = none); others: box
             public float Tracking;
             public float[] Data;
-            public double Value, Max;
+            public double Value, Max, Min;   // kind 11: Value = hours from 6 AM to the first reading, Min..Max = the scale
         }
 
         internal static string famLight, famSemi, famRegular;
@@ -477,7 +478,8 @@ namespace ClaudeCurtain
         private static readonly Regex WeatherRow = new Regex(
             @"^(?<day>[^:]+):\s+(?:Hi\s+(?<hi>-?\d+\S?))?\s*/?\s*(?:Lo\s+(?<lo>-?\d+\S?))?\s+(?<desc>.+?)(?:\s+\((?<pop>\d+)% precip\))?" +
             @"(?:\s+\[wind (?<wind>\d+) mph at (?<wat>[^,\]]+?)(?:, gusts (?<gust>\d+))?\])?" +
-            @"(?:\s+\[(?:hi (?<hat>\d{1,2} [AP]M))?(?:,\s*)?(?:lo (?<lot>\d{1,2} [AP]M))?\])?\s*$",
+            @"(?:\s+\[(?:hi (?<hat>\d{1,2} [AP]M))?(?:,\s*)?(?:lo (?<lot>\d{1,2} [AP]M))?\])?" +
+            @"(?:\s+\[hours (?<hs>\S+) (?<ht>[-\dx,]+) (?<hw>[\dx,]+) (?<hg>[\dx,]+)\])?\s*$",
             RegexOptions.IgnoreCase);
 
         /// <summary>Lays the composition out at the largest scale that leaves room for the drift.</summary>
@@ -746,7 +748,11 @@ namespace ClaudeCurtain
                     if (capturedText != null)
                     {
                         capturedText.Clear();
-                        foreach (Op op in ops) if (op.Kind == 0) capturedText.Add(new KeyValuePair<string, Color>(op.Text, op.Color));
+                        foreach (Op op in ops)
+                        {
+                            if (op.Kind == 0) capturedText.Add(new KeyValuePair<string, Color>(op.Text, op.Color));
+                            if (op.Kind == 11) capturedText.Add(new KeyValuePair<string, Color>("[graph " + op.Text + "]", op.Color));   // the days' graphs, for the tests
+                        }
                     }
                 }
                 return L;
@@ -1609,6 +1615,10 @@ namespace ClaudeCurtain
                     rm.Groups["gust"].Success ? rm.Groups["gust"].Value : "",
                     rm.Groups["hat"].Success ? rm.Groups["hat"].Value : "",
                     rm.Groups["lot"].Success ? rm.Groups["lot"].Value : "",
+                    rm.Groups["hs"].Success ? rm.Groups["hs"].Value : "",
+                    rm.Groups["ht"].Success ? rm.Groups["ht"].Value : "",
+                    rm.Groups["hw"].Success ? rm.Groups["hw"].Value : "",
+                    rm.Groups["hg"].Success ? rm.Groups["hg"].Value : "",
                 });
             }
             HourPoint[] hours = NextHours(s.Hourly, s.Now, 6);
@@ -1728,9 +1738,88 @@ namespace ClaudeCurtain
                 AddText(ops, m, "NEXT 3 DAYS", fLabel, Tertiary, ox, y, track);
                 y += st(5) + fData.CapHeight;
                 float rowPitch = line2 + st(4) * 0.95f + fData.CapHeight;
+
+                // The days' hours (2026-11-21, the user: the rows looked busy; "visualize the high/low for the day
+                // and high/windspeed over time similar to my CPU/Ram/Network usage"): where a row carries them, its
+                // first line is the day, a graph of the temperature with the low and the high, and a graph of the
+                // wind with its peak (and the strongest gust); the second line the words and the chance of rain.
+                // One scale for all three rows; the graphs' widths come from templates, never from the values.
+                float[][] dT = new float[3][], dW = new float[3][], dG = new float[3][];
+                double[] dOff = new double[3];
+                double tLo = double.MaxValue, tHi = double.MinValue, wTop = WindyMph;
+                bool anySeries = false;
+                for (int i = 0; i < 3 && parsed && i < wx.Count; i++)
+                {
+                    string[] r = wx[i];
+                    if (!ParseSeries(r[10], r[11], r[12], r[13], out dOff[i], out dT[i], out dW[i], out dG[i])) { dT[i] = null; continue; }
+                    anySeries = true;
+                    foreach (float v in dT[i]) if (!float.IsNaN(v)) { tLo = Math.Min(tLo, v); tHi = Math.Max(tHi, v); }
+                    foreach (float v in dW[i]) if (!float.IsNaN(v)) wTop = Math.Max(wTop, v);
+                }
+                if (anySeries && tHi - tLo < DayTempSpan) { double mid = (tHi + tLo) / 2; tLo = mid - DayTempSpan / 2; tHi = mid + DayTempSpan / 2; }
+                float gTempLabW = Measure(m, "-99–99°", fData.Font, 0);
+                float gWindLabW = Measure(m, "99–99", fData.Font, 0) + Measure(m, " mph", fSmall.Font, 0);
+                float gA = ox + tx + dayW + gx * 0.8f, gap1 = (float)Math.Round(gx * 0.4f), gap2 = (float)Math.Round(gx * 0.8f);
+                float gAvail = ox + w - gA - gap1 - gTempLabW - gap2 - gap1 - gWindLabW;
+                float gTW = (float)Math.Floor(gAvail * 0.55f), gWW = (float)Math.Floor(gAvail - gTW);
+                float gH = (float)Math.Round(fData.CapHeight * 1.3f);
+                bool graphsFit = gTW >= unit * 0.6f && gWW >= unit * 0.5f;
+                float tLabX = gA + gTW + gap1, gB = tLabX + gTempLabW + gap2, wLabX = gB + gWW + gap1;
+
                 for (int i = 0; i < 3; i++)
                 {
-                    if (parsed && i < wx.Count)
+                    if (parsed && i < wx.Count && dT[i] != null && graphsFit)
+                    {
+                        string[] r = wx[i];
+                        bool night = r[0].IndexOf("night", StringComparison.OrdinalIgnoreCase) >= 0;
+                        ops.Add(new Op { Kind = 3, Text = Symbol(r[3], night), X = ox, Y = (float)Math.Round(y - fData.CapHeight), W = icon, H = icon, Color = Secondary });
+                        string day = ShortDay(r[0]);
+                        Op dayOp = AddTextOp(ops, day, fLabel, Tertiary, ox + tx, y, track);
+                        if (Measure(m, day, fLabel.Font, track) > dayW) dayOp.W = dayW;
+                        // the temperature: the day's high marked (or, for a night, its low), then "low–high"
+                        bool hasHi = r[1].Length > 0;
+                        ops.Add(new Op { Kind = 11, Text = hasHi ? "high" : "low", X = gA, Y = y - gH, W = gTW, H = gH, Data = dT[i],
+                                         Value = dOff[i], Min = tLo, Max = tHi, Color = Secondary });
+                        string lo = r[2].TrimEnd('°'), hi = r[1].TrimEnd('°');
+                        float lx0 = tLabX;
+                        if (lo.Length > 0 && hasHi)
+                        {
+                            lx0 += AddText(ops, m, lo + "–", fData, Secondary, lx0, y, 0);
+                            AddText(ops, m, hi + "°", fData, Primary, lx0, y, 0);
+                        }
+                        else if (lo.Length > 0) AddText(ops, m, lo + "°", fData, Secondary, lx0, y, 0);
+                        else if (hasHi) AddText(ops, m, hi + "°", fData, Primary, lx0, y, 0);
+                        // the wind: its peak over the same hours, a gust well above it as a range ("8–14 mph", as the
+                        // map's stations write it), amber from 20 mph or gusts from 30
+                        float peak = float.NaN, gust = float.NaN;
+                        foreach (float v in dW[i]) if (!float.IsNaN(v) && (float.IsNaN(peak) || v > peak)) peak = v;
+                        foreach (float v in dG[i]) if (!float.IsNaN(v) && (float.IsNaN(gust) || v > gust)) gust = v;
+                        if (!float.IsNaN(peak))
+                        {
+                            int pk = (int)Math.Round(peak), gs = float.IsNaN(gust) ? -1 : (int)Math.Round(gust);
+                            bool windy = pk >= WindyMph || gs >= WindyGustMph;
+                            Color wc = windy ? Warn : Secondary;
+                            ops.Add(new Op { Kind = 11, Text = "peak", X = gB, Y = y - gH, W = gWW, H = gH, Data = dW[i], Value = dOff[i],
+                                             Min = 0, Max = wTop, Color = wc });
+                            string speed = pk.ToString(CultureInfo.InvariantCulture) + (gs >= pk + 5 ? "–" + gs.ToString(CultureInfo.InvariantCulture) : "");
+                            float sw = AddText(ops, m, speed, fData, wc, wLabX, y, 0);
+                            AddText(ops, m, " mph", fSmall, windy ? Warn : Tertiary, wLabX + sw, y, 0);
+                        }
+                        // second line: the words, and the chance of rain at the right
+                        float descRight = ox + w;
+                        if (r[4].Length > 0)
+                        {
+                            float pw = Measure(m, r[4], fData.Font, 0);
+                            float px = ox + w - pw;
+                            AddText(ops, m, r[4], fData, Tertiary, px, y + line2, 0);
+                            float dw = drop * 0.62f;
+                            ops.Add(new Op { Kind = 6, X = px - gx * 0.25f - dw, Y = y + line2 - drop, W = dw, H = drop, Color = Rain });
+                            descRight = px - gx * 0.25f - dw - gx * 0.5f;
+                        }
+                        Op dd = AddTextOp(ops, SentenceCase(r[3]), fSmall, Tertiary, ox + tx, y + line2, 0);
+                        dd.W = descRight - (ox + tx);
+                    }
+                    else if (parsed && i < wx.Count)
                     {
                         string[] r = wx[i];
                         bool night = r[0].IndexOf("night", StringComparison.OrdinalIgnoreCase) >= 0;
@@ -1842,6 +1931,7 @@ namespace ClaudeCurtain
             return string.Join(" ", words);
         }
 
+        public const double DayTempSpan = 12;  // the days' temperature graphs show at least this many degrees top to bottom
         public const int WindyMph = 20;       // a day's peak wind from here (or gusts from WindyGustMph) shows in amber
         public const int WindyGustMph = 30;
 
@@ -2193,7 +2283,101 @@ namespace ClaudeCurtain
                 case 10:
                     DrawGlyph(g, op.Text, new RectangleF(ox + op.X, oy + op.Y, op.W, op.H), op.Color);
                     break;
+                case 11:
+                    DrawDayGraph(g, op, ox, oy, unit);
+                    break;
             }
+        }
+
+        /// <summary>
+        /// A day's graph in the three-day rows (2026-11-21), drawn like the system's sparklines (a faint area under
+        /// a line, a recessive baseline, a bright dot): the hours from 6 AM to 6 AM the next morning across, so
+        /// the three rows share one clock (tonight's starts part way), with short ticks under the baseline at noon
+        /// and midnight; the scale (Min..Max) is the same for all three rows, so a warmer or windier day stands out.
+        /// The dot marks the day's high (Text "high"), the night's low ("low") or the wind's peak ("peak").
+        /// </summary>
+        private static void DrawDayGraph(Graphics g, Op op, float ox, float oy, float unit)
+        {
+            float x0 = ox + op.X, y0 = oy + op.Y, gw = op.W, gh = op.H;
+            float yb = (float)Math.Round(y0 + gh) + 0.5f;
+            float tick = Math.Max(2f, (float)Math.Round(gh * 0.22f));
+            using (Pen track = new Pen(Track, 1f))
+            {
+                g.DrawLine(track, x0, yb, x0 + gw, yb);
+                foreach (double at in new[] { 6.0, 18.0 })   // noon and midnight
+                {
+                    float tx = (float)Math.Round(x0 + gw * at / 24.0) + 0.5f;
+                    g.DrawLine(track, tx, yb, tx, yb + tick);
+                }
+            }
+            float[] d = op.Data;
+            if (d == null) return;
+            double lo = op.Min, hi = op.Max > op.Min ? op.Max : op.Min + 1;
+            List<PointF> pts = new List<PointF>();
+            List<float> vals = new List<float>();
+            for (int i = 0; i < d.Length; i++)
+            {
+                if (float.IsNaN(d[i])) continue;
+                double hours = op.Value + i + 0.5;
+                if (hours < 0 || hours > 24) continue;
+                double v = Math.Max(lo, Math.Min(hi, d[i]));
+                pts.Add(new PointF(x0 + (float)(gw * hours / 24.0), y0 + gh - (float)((v - lo) / (hi - lo)) * (gh - 1)));
+                vals.Add(d[i]);
+            }
+            if (pts.Count < 2) return;
+            PointF[] area = new PointF[pts.Count + 2];
+            pts.CopyTo(area, 0);
+            area[pts.Count] = new PointF(pts[pts.Count - 1].X, y0 + gh);
+            area[pts.Count + 1] = new PointF(pts[0].X, y0 + gh);
+            using (SolidBrush fill = new SolidBrush(Color.FromArgb(46, op.Color)))
+                g.FillPolygon(fill, area);
+            float lw = Math.Max(1.5f, unit / 80f);
+            using (Pen p = new Pen(op.Color, lw) { LineJoin = LineJoin.Round, StartCap = LineCap.Round, EndCap = LineCap.Round })
+                g.DrawLines(p, pts.ToArray());
+            int mark = 0;
+            for (int i = 1; i < vals.Count; i++)
+                if (op.Text == "low" ? vals[i] < vals[mark] : vals[i] > vals[mark]) mark = i;   // the first hour it reaches it
+            PointF at2 = pts[mark];
+            float dot = Math.Max(5f, unit / 20f);
+            using (SolidBrush halo = new SolidBrush(Color.Black))
+                g.FillEllipse(halo, at2.X - dot / 2f - lw, at2.Y - dot / 2f - lw, dot + 2 * lw, dot + 2 * lw);
+            using (SolidBrush b = new SolidBrush(op.Text == "peak" ? op.Color : Hero))
+                g.FillEllipse(b, at2.X - dot / 2f, at2.Y - dot / 2f, dot, dot);
+        }
+
+        /// <summary>
+        /// A row's hours from weather.txt ("[hours START t,t,... w,w,... g,g,...]"; "x" for an hour the grid
+        /// lacks): the temperatures (F), winds and gusts (mph) hour by hour, and how many hours after 6 AM the
+        /// first falls (6 AM of its own morning, or of the evening before for an hour before 6 AM). False when
+        /// the hours are missing, malformed, or hold fewer than two temperatures.
+        /// </summary>
+        internal static bool ParseSeries(string start, string temps, string winds, string gusts, out double offset,
+                                         out float[] t, out float[] w, out float[] gu)
+        {
+            offset = 0; t = w = gu = null;
+            DateTimeOffset at;
+            if (string.IsNullOrEmpty(start) || !DateTimeOffset.TryParse(start, CultureInfo.InvariantCulture, DateTimeStyles.None, out at)) return false;
+            Func<string, float[]> read = text =>
+            {
+                string[] parts = (text ?? "").Split(',');
+                float[] v = new float[parts.Length];
+                for (int i = 0; i < parts.Length; i++)
+                {
+                    float f;
+                    v[i] = float.TryParse(parts[i], NumberStyles.Float, CultureInfo.InvariantCulture, out f) && Math.Abs(f) < 300 ? f : float.NaN;
+                }
+                return v;
+            };
+            t = read(temps); w = read(winds); gu = read(gusts);
+            if (t.Length > 48 || w.Length != t.Length || gu.Length != t.Length) { t = w = gu = null; return false; }
+            int known = 0;
+            foreach (float f in t) if (!float.IsNaN(f)) known++;
+            if (known < 2) { t = w = gu = null; return false; }
+            DateTime local = at.ToLocalTime().DateTime;   // the curtain's own clock: the rows are local days
+            DateTime six = local.Date.AddHours(6);
+            if (local < six) six = six.AddDays(-1);
+            offset = (local - six).TotalHours;
+            return true;
         }
 
         /// <summary>
