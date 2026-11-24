@@ -4,7 +4,7 @@ A black screen that covers every monitor and blocks the physical keyboard and mo
 (injected) clicks, typing and screenshots keep working underneath. It's for hiding an automated session on
 a machine you share a room with, without taking the machine away from yourself.
 
-![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone, and beside it the track now playing (a sample one) with its progress line; a radar map of the San Francisco Bay Area below it, its hills shaded and contoured and no rain on it, with temperatures around the Bay, a tide table in one corner and the weather alerts in the other; under the map the message "PC in use by Claude" beside a close-up of the town's streets; and a data column with ten-minute CPU and network sparklines, memory and disk bars, then the forecast: the conditions now as small symbols (humidity, dew point, wind, sunrise and sunset), the next six hours as a temperature curve over rain-chance bars, and three days as small temperature and wind graphs](docs/curtain.png)
+![The curtain on a 2560 × 1440 screen: a large clock with the date and time zone, and beside it the track now playing (a sample one) with its progress line; a radar and fog map of a made-up sample place below it (a coast, a river and a lake, its hills shaded and contoured, showers moving in from the west and a fog bank on the coast), with temperatures and wind, a tide table in one corner and the weather alerts in the other; under the map the message "PC in use by Claude" beside a close-up of the place's streets; and a data column with ten-minute CPU and network sparklines, memory and disk bars, then the forecast: the conditions now as small symbols (humidity, dew point, wind, sunrise and sunset), the next six hours as a temperature curve over rain-chance bars, and three days as small temperature and wind graphs](docs/curtain.png)
 
 Awareness, not lockout: it counts and logs every blocked key press, click and escape attempt, can ping your
 phone while someone is at the keyboard, and shows a "While you were away" summary when you unlock. The
@@ -310,9 +310,11 @@ clouds to force the map's mode, or music, paused or music-long for a sample trac
 (`radar,music`). `--preview-seconds N` shows the drift position N seconds in. With
 `--local-dir` pointing at a folder that has a `map.txt`, the preview uses that real map, at the real time
 and with the real hourly forecast; otherwise it draws a made-up sample place (a coast, a river and a lake),
-which is what the images here show, all but the first: that one is a real map of the Bay Area, rendered
-with `--hide-home` and `--test-state radar,music` (so the track is the sample one). To share a picture of your own map, add `--hide-home`: it leaves the
-home dot off and centres the map on your place rounded to a tenth of a degree, not on the place itself.
+which is what every image here shows (the first rendered with `--test-state radar,music` and an empty
+`--local-dir`). To share a picture of your own map, add `--hide-home`: it leaves the home dot off and
+centres the map on your place rounded to a tenth of a degree, not on the place itself. The picture still
+shows your area, its streets in the close-up, and the place name from your config, so share one only if
+you are comfortable with people knowing your town.
 
 ## On-screen info
 
