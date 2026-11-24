@@ -272,9 +272,12 @@ about what it is doing. Everything on it comes from one proportional system buil
   against each other. It fades in when the curtain rises and cross-fades when the minute turns. The
   accent rule breathes slowly while the curtain is up, a quiet sign that the PC is at work. Typed PIN dots
   ease in, and a wrong PIN shakes them before they fade and the note appears. The map plays its past
-  hour on a loop, a picture every 0.7 s, each cross-fading into the next, holding the latest for two
-  steps, while a short mark runs along its header's rule. The screen repaints at about
-  60 frames a second only while one of these short animations plays, and five times a second otherwise.
+  hour on a loop, a picture every 0.7 s, each fading gradually into the next through the whole step
+  (eased, so each picture is whole for a moment), holding the latest for two steps, while a short mark
+  runs along its header's rule. The two pictures of a fade, and the fog under them, are blended pixel by
+  pixel into one picture and drawn once (about 4 ms), so what they share never thins mid-fade. The screen
+  repaints at about 60 frames a second only while one of the short animations plays, just the map's part
+  about 29 times a second while only the loop moves, and five times a second otherwise.
 - **Drift.** Against burn-in, the composition wanders within 5% of its resting point: one sweep across
   every 5 minutes and one sweep down every 5 × φ ≈ 8.1 minutes. Because φ is irrational the path never
   repeats, so over the hours it covers its area evenly instead of retracing one figure:
@@ -355,7 +358,15 @@ And in the left column:
   words, or when the radar shows at least light rain (20 dBZ) within 50 km. The source is NOAA's MRMS
   mosaic through NOAA nowCOAST: every radar that covers the area blended at 1 km and cleaned of ground
   clutter, new about every 4 minutes. The curtain reads the exact rain rate (dBZ) back out of NOAA's
-  colours (a self-test round-trips every value) and draws it in its own. *Clouds* are NOAA's GOES
+  colours (a self-test round-trips every value) and draws it in its own, smoothed: interpolated with a
+  cubic curve that passes through each cell's own value, so smoothing never moves rain, then blurred by
+  about a quarter of a cell, so the rain's edge is a curve rather than steps. *Fog* shows in either mode,
+  as a soft veil under the radar or the clouds: NOAA's GOES-West fog and low stratus product (the chance
+  of fog or cloud low enough for instrument flight rules, from the satellite and a weather model, day
+  and night) from SSEC RealEarth, whose web-map tiles the weather script stitches over the box every 10
+  minutes. The curtain reads its colours back as percentages, smooths its 10 km cells, and shows nothing
+  below 30%, a veil at most 0.30 thick above it, each weather picture with the fog of its own moment;
+  the header then adds FOG. *Clouds* are NOAA's GOES
   satellite pictures through nowCOAST, every 5 minutes: visible by day (half-kilometre detail, enough to
   watch coastal fog move; evened out when the sun is low), infrared at night (it shows cloud, but fog and
   low stratus are close to the ground's temperature, so they barely show at night). Land and water come
@@ -386,7 +397,8 @@ And in the left column:
   home 7/10 of the way across (change `DetailViewKm`, `DetailSouthKm` and `DetailWestShare` in
   `WeatherMap.cs` to frame it differently). It plays the
   map's own radar or cloud pictures at the same moment of the loop, so the two always agree, the
-  radar's 1 km cells softened by a third of a cell where blown up this far so showers come out round.
+  radar's 1 km cells softened by a third of a cell where blown up this far so showers come out round,
+  and the fog's 10 km cells an even veil.
   Its own ground is fetched once per place: a box of 0.2 x 0.4 degrees around the place rounded to a
   tenth of a degree (more of it west), at about 12 m a pixel, with the land and water map, the
   hydrography's water and marsh and its high-resolution creek lines (canals and ditches drawn as
@@ -528,7 +540,8 @@ Set in Bahnschrift (Microsoft, after DIN 1451). Grid, type scale, margins and dr
 golden ratio. Drawn with GDI+ from the C# compiler inside Windows, with no external assets: the weather
 symbols, sparklines and bars are all code, and the map is drawn pixel by pixel from NOAA's radar,
 satellite, station and tide numbers, over relief from USGS elevation (AWS Terrain Tiles), a land and
-water map from NASA GIBS (© OpenStreetMap contributors), the USGS National Hydrography Dataset and the US Census Bureau's TIGER streets. Designed, built and tested with
+water map from NASA GIBS (© OpenStreetMap contributors), the USGS National Hydrography Dataset, the US Census Bureau's TIGER streets
+and, for the fog, NOAA's GOES-West fog and low stratus product (Source: SSEC RealEarth, UW-Madison). Designed, built and tested with
 [Claude Code](https://claude.com/claude-code).
 
 ## License

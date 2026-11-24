@@ -311,7 +311,7 @@ $mapNorth = 1.0       # the box: from 0.6 degrees south of the grid to 1.0 north
 $mapSouth = 0.6       # and 1.7 either side, 1.6 x 3.4 degrees (about 180 x 300 km at 37 degrees north), more than the
 $mapHalfLon = 1.7     # curtain shows; whole tenths only, since map.txt gives the box to one decimal
 $mapFile = Join-Path $LocalDir 'map.txt'
-$mapNamePattern = '^(radar|sat-vis|sat-ir)-\d{8}T\d{6}Z\.(png|jpg)$'
+$mapNamePattern = '^(radar|sat-vis|sat-ir|fog)-\d{8}T\d{6}Z\.(png|jpg)$'
 
 # The forecast grid's centre, which Update-Hourly writes as "# location lat lon".
 function Get-MapCenter {
@@ -463,7 +463,7 @@ function Get-MapEntries([string]$Kind) {
     if (Test-Path $mapFile) {
         foreach ($line in (Get-Content -Path $mapFile -Encoding UTF8)) {
             if (-not $line.StartsWith("$Kind ")) { continue }
-            if ($Kind -eq 'radar' -or $Kind -eq 'sat') {
+            if ($Kind -eq 'radar' -or $Kind -eq 'sat' -or $Kind -eq 'fog') {
                 if (-not (Test-Path (Join-Path $LocalDir (($line -split '\s+')[-1])))) { continue }
             }
             $list.Add($line)
@@ -679,6 +679,90 @@ function Update-Frames([string]$Prefix, [string]$Kind, [string]$Workspace, [stri
     return $lines.ToArray()
 }
 
+# ------------------------------------------------------------------ fog
+# The chance of fog or low cloud: NOAA's GOES-West fog and low stratus product ("IFR probability"), from SSEC
+# RealEarth (University of Wisconsin-Madison), which serves it as web-map tiles; zoom 7 is its finest (about
+# 1 km a pixel here, the product's cells about 10 km; the curtain smooths them). One picture every 10 minutes
+# over the last hour the product has (it sometimes lags for hours), each stitched from the tiles that cover
+# the box. RealEarth's terms: free through its API, credited "Source: SSEC RealEarth, UW-Madison". Added
+# 2026-11-23 at the user's request (fog over the radar, "if it's pixelated smooth it out"). Lines in map.txt:
+#   fogtiles Z X0 Y0 X1 Y1
+#   fog UTC FILE
+$realEarth = 'https://realearth.ssec.wisc.edu/api'
+$fogProduct = 'G18-L2-CONUS-FLS-IFR'
+$fogZoom = 7
+$script:fogLines = $null
+$script:fogAt = [DateTime]::MinValue
+$script:fogBox = ''
+
+function Update-Fog([double[]]$Box) {
+    $boxKey = ($Box | ForEach-Object { $_.ToString('0.0', $inv) }) -join ' '
+    if ($null -ne $script:fogLines -and $script:fogBox -eq $boxKey -and ((Get-Date) - $script:fogAt).TotalMinutes -lt 10) {
+        return @($script:fogLines | Where-Object { $_ -notmatch '^fog ' -or (Test-Path (Join-Path $LocalDir (($_ -split '\s+')[-1]))) })
+    }
+    $n = [Math]::Pow(2, $fogZoom)
+    $tileX = { param([double]$Lon) [int][Math]::Floor(($Lon + 180) / 360 * $n) }
+    $tileY = { param([double]$Lat) $r = $Lat * [Math]::PI / 180; [int][Math]::Floor((1 - [Math]::Log([Math]::Tan($r) + 1 / [Math]::Cos($r)) / [Math]::PI) / 2 * $n) }
+    $x0 = & $tileX $Box[1]; $x1 = & $tileX $Box[3]; $y0 = & $tileY $Box[2]; $y1 = & $tileY $Box[0]
+    if ($x1 - $x0 -gt 3 -or $y1 - $y0 -gt 3) { throw 'the box needs too many fog tiles' }
+    $reply = Invoke-RestMethod -Uri "$realEarth/times?products=$fogProduct" -Headers @{ 'User-Agent' = $ua } -TimeoutSec $TimeoutSec
+    $times = @(@($reply.$fogProduct) | ForEach-Object {
+        if ([string]$_ -match '^(\d{4})(\d\d)(\d\d)\.(\d\d)(\d\d)(\d\d)$') {
+            '{0}-{1}-{2}T{3}:{4}:{5}Z' -f $Matches[1], $Matches[2], $Matches[3], $Matches[4], $Matches[5], $Matches[6]
+        }
+    })
+    $lines = New-Object System.Collections.Generic.List[string]
+    foreach ($f in (Select-Frames $times 10 60)) {
+        if (([DateTime]::UtcNow - $f.Utc).TotalHours -gt 2) { continue }   # the curtain shows none older
+        $name = 'fog-{0}.png' -f $f.Utc.ToString("yyyyMMdd'T'HHmmss'Z'", $inv)
+        $path = Join-Path $LocalDir $name
+        if (-not (Test-Path $path)) {
+            try { Save-FogPicture $f.Utc $x0 $y0 $x1 $y1 $path }
+            catch { Write-Host "Fog picture skipped ($name): $($_.Exception.Message)"; continue }
+        }
+        $lines.Add(('fog {0} {1}' -f $f.Utc.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", $inv), $name))
+    }
+    if ($lines.Count -gt 0) { $lines.Insert(0, ('fogtiles {0} {1} {2} {3} {4}' -f $fogZoom, $x0, $y0, $x1, $y1)) }
+    $script:fogLines = $lines.ToArray()
+    $script:fogAt = Get-Date
+    $script:fogBox = $boxKey
+    return $script:fogLines
+}
+
+# One fog picture: its tiles at that time, side by side, as one PNG (copied pixel for pixel).
+function Save-FogPicture([datetime]$Utc, [int]$X0, [int]$Y0, [int]$X1, [int]$Y1, [string]$Path) {
+    Add-Type -AssemblyName System.Drawing
+    $time = $Utc.ToString('yyyy-MM-dd+HH:mm:ss', $inv)
+    $bmp = New-Object System.Drawing.Bitmap (256 * ($X1 - $X0 + 1)), (256 * ($Y1 - $Y0 + 1)), ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    try {
+        $g.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+        $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+        for ($y = $Y0; $y -le $Y1; $y++) {
+            for ($x = $X0; $x -le $X1; $x++) {
+                $tile = "$Path.$x-$y.tile"
+                try {
+                    Save-MapImage "$realEarth/image?products=$fogProduct&time=$time&x=$x&y=$y&z=$fogZoom" $tile
+                    $img = [System.Drawing.Image]::FromFile($tile)
+                    try {
+                        if ($img.Width -ne 256 -or $img.Height -ne 256) { throw "a fog tile came back $($img.Width) x $($img.Height)" }
+                        $g.DrawImage($img, (New-Object System.Drawing.Rectangle (256 * ($x - $X0)), (256 * ($y - $Y0)), 256, 256),
+                                     0, 0, 256, 256, [System.Drawing.GraphicsUnit]::Pixel)
+                    } finally { $img.Dispose() }
+                } finally {
+                    if (Test-Path $tile) { Remove-Item -Path $tile -Force -ErrorAction SilentlyContinue }
+                }
+            }
+        }
+        $bmp.Save("$Path.part", [System.Drawing.Imaging.ImageFormat]::Png)
+        Move-Item -Path "$Path.part" -Destination $Path -Force
+    } finally {
+        $g.Dispose(); $bmp.Dispose()
+        if (Test-Path "$Path.part") { Remove-Item -Path "$Path.part" -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 # ------------------------------------------------------------------ warnings and earthquakes
 # The National Weather Service's active alerts for the state the forecast grid is in (warnings in coral on the
 # map, watches and advisories in amber): surf, wind, air quality, flood, fire, tornado. An alert names forecast
@@ -839,6 +923,10 @@ function Update-Map {
     try { $sat = Update-Frames "sat-$kind" "sat $kind" 'satellite' $layer 10 60 $box ([int][Math]::Round($lonSpan / 0.004)) ([int][Math]::Round($latSpan / 0.004)) 'image/jpeg' 'jpg' }
     catch { Write-Host "Satellite refresh skipped: $($_.Exception.Message)"; $sat = Get-MapEntries 'sat' }
 
+    # Fog: the chance of fog, best-effort (without it the map is as before).
+    try { $fog = @(Update-Fog $box) }
+    catch { Write-Host "Fog refresh skipped: $($_.Exception.Message)"; $fog = @(Get-MapEntries 'fogtiles') + @(Get-MapEntries 'fog') }
+
     # Station temperatures and wind; the tide.
     try { $stations = Get-StationLines $box }
     catch { Write-Host "Station reports skipped: $($_.Exception.Message)"; $stations = Get-MapEntries 'station' }
@@ -860,9 +948,10 @@ function Update-Map {
     $lines.Add("base $baseName")
     if (Test-Path $waterPath) { $lines.Add("water $waterName") }
     foreach ($hk in 'waterfine', 'marsh', 'streams') { if ($hydro[$hk]) { $lines.Add("$hk $($hydro[$hk])") } }
-    foreach ($l in @($dem) + @($detail) + @($radar) + @($sat) + @($stations) + @($tides) + @($alerts) + @($quakes)) { if ($l) { $lines.Add($l) } }
+    foreach ($l in @($dem) + @($detail) + @($radar) + @($sat) + @($fog) + @($stations) + @($tides) + @($alerts) + @($quakes)) { if ($l) { $lines.Add($l) } }
     $census = if (@($detail) -match '^detail roads ') { '  {0}  Census' -f [char]0x00B7 } else { '' }
-    $lines.Add(('credit NOAA  {0}  USGS{2}  {0}  {1} OpenStreetMap' -f [char]0x00B7, [char]0x00A9, $census))
+    $ssec = if (@($fog) -match '^fog ') { '  {0}  SSEC RealEarth, UW-Madison' -f [char]0x00B7 } else { '' }
+    $lines.Add(('credit NOAA  {0}  USGS{2}{3}  {0}  {1} OpenStreetMap' -f [char]0x00B7, [char]0x00A9, $census, $ssec))
     Write-Atomic $mapFile $lines
 
     # Only now that map.txt no longer lists them: remove pictures that dropped out of the last hour.
@@ -871,8 +960,8 @@ function Update-Map {
     Get-ChildItem -Path $LocalDir -File | Where-Object { $_.Name -match $mapNamePattern -and -not $keep.ContainsKey($_.Name) } |
         Remove-Item -Force -ErrorAction SilentlyContinue
     $tideNote = if (@($tides).Count -gt 1) { 'tide station ' + ((@($tides)[0] -split '\s+')[1]) } else { 'no tide station near' }
-    Write-Host ("Wrote {0} ({1} radar, {2} {3} satellite picture(s), {4} station report(s), {5}, relief {6})." -f $mapFile, @($radar).Count, @($sat).Count, $kind,
-                @($stations).Count, $tideNote, $(if (@($dem).Count -gt 0) { 'yes' } else { 'no' }))
+    Write-Host ("Wrote {0} ({1} radar, {2} {3} satellite, {4} fog picture(s), {5} station report(s), {6}, relief {7})." -f $mapFile, @($radar).Count, @($sat).Count, $kind,
+                @(@($fog) -match '^fog ').Count, @($stations).Count, $tideNote, $(if (@($dem).Count -gt 0) { 'yes' } else { 'no' }))
 }
 
 function Test-CurtainAlive {

@@ -100,6 +100,19 @@ namespace ClaudeCurtain
         /// <summary>True while a short animation is running; the window then repaints at ~60 frames a second.</summary>
         public bool NeedsFastFrames { get { return fast; } }
 
+        /// <summary>
+        /// While NeedsFastFrames, the least time between repaints: none for the short animations; while only the
+        /// map's replay fades, about 28 a second, and only the map's part of the window (AnimatedArea). Since
+        /// 2026-11-23 the replay fades through every step, so it would otherwise keep the whole screen at 60.
+        /// </summary>
+        public int FrameIntervalMs { get { return mapOnly ? MapFrameMs : 0; } }
+        public const int MapFrameMs = 34;
+
+        /// <summary>While only the map animates: the part of the window that changes. Empty = all of it.</summary>
+        public Rectangle AnimatedArea { get { return mapOnly ? mapArea : Rectangle.Empty; } }
+        private bool mapOnly;
+        private Rectangle mapArea;
+
         /// <summary>The layout and where it was last drawn (for the construction overlay in previews).</summary>
         internal Layout Current { get { return cur; } }
         internal Point LastPlacement { get { return lastAt; } }
@@ -160,7 +173,9 @@ namespace ClaudeCurtain
 
             bool pinAnim = now - wrongStart < ShakeMs + SwapMs + 60 || now - wrongEnd < SwapMs + 60 || now - stateSince < SwapMs + 60;
             for (int i = 0; i < shownDigits && !pinAnim; i++) pinAnim = now - dotBorn[i] < DotPopMs + 40;
-            fast = now - firstPaint < FadeInMs + 60 || prev != null || pinAnim || mapFading;
+            bool other = now - firstPaint < FadeInMs + 60 || prev != null || pinAnim;
+            fast = other || mapFading;
+            mapOnly = !other && mapFading;
         }
 
         private void TrackPin(DisplayState s, long now)
@@ -787,6 +802,8 @@ namespace ClaudeCurtain
 
             string what = radar ? "RADAR" : "CLOUDS";
             if (!radar && map.Sat.Length > 0 && map.Sat[0].Kind == "ir") what += "   ·   INFRARED";
+            if (map.Fog.Length > 0 && WeatherMap.FogInView(map.Fog[map.Fog.Length - 1], crop, map.FrameBox.IsEmpty ? map.Box : map.FrameBox))
+                what += "   ·   FOG";   // the veil under the weather (2026-11-23)
             if (L.MapFrames.Length > 1) what += "   ·   PAST HOUR";
             AddText(ops, m, what, fLabel, Tertiary, 0, L.MapHeadBaseline, track);
             ops.Add(new Op { Kind = 1, X = 0, Y = L.MapRuleY, W = L.Map.Width, H = 1, Color = RuleColor });
@@ -1122,21 +1139,33 @@ namespace ClaudeCurtain
             }
             float show = (1 - veil) * fadeIn;
             float dim = (float)(s.NightDim > 0 && s.NightDim < 1 ? s.NightDim : 1.0) * show;
-            MapFrame[] fr = l.MapFrames;
+            MapFrame[] fr = l.MapFrames, fog = map.Fog;
+            int i = 0, j = 0;
+            float t = 0, progress = 1;
+            bool playing = false;
+            if (fr.Length > 0) WeatherMap.LoopAt(fr.Length, now, out i, out j, out t, out progress, out playing);
+            if (fr.Length > 0 || fog.Length > 0)
+            {
+                // The radar or the clouds, picture i fading into j, over the fog of the same moments; blended into
+                // one picture (pictures not rendered yet are left out until they are, below).
+                MapFrame a = fr.Length > 0 ? fr[i] : null, b = fr.Length > 0 && j != i && t > 0 ? fr[j] : null;
+                MapFrame fa = fog.Length == 0 ? null : (a != null ? WeatherMap.FogAt(fog, a.Utc) : fog[fog.Length - 1]);
+                MapFrame fb = b != null ? WeatherMap.FogAt(fog, b.Utc) : null;
+                if (fb == fa) fb = null;
+                Bitmap pic = MapArt.Weather(map, l.MapCrop, mw, mh, a, b, t, fa, fb, t, dim);
+                if (pic != null) g.DrawImageUnscaled(pic, mx, my);
+                if (b != null && t < 1 && show > 0.004f) mapFading = true;   // a fade the PIN's veil hides needs no frames
+                DrawDetailFrames(g, l, ox, oy, a, b, t, fa, fb, dim);
+            }
+            // What changes while only the replay plays: the header (the picture's time, the replay's mark), the map
+            // and the close-up; the window repaints just that between its regular steps.
+            Rectangle area = Rectangle.FromLTRB(mx - 2, (int)Math.Floor(oy + l.MapHeadBaseline - l.Label.Font.Size * 1.5f), mx + mw + 2, my + mh + 2);
+            if (l.Detail.Width > 0)
+                area = Rectangle.Union(area, Rectangle.FromLTRB((int)Math.Floor(ox + l.Detail.X) - 2, (int)Math.Floor(oy + l.Detail.Y) - 2,
+                                                                (int)Math.Ceiling(ox + l.Detail.Right) + 2, (int)Math.Ceiling(oy + l.Detail.Bottom) + 2));
+            mapArea = area;
             if (fr.Length > 0)
             {
-                int i, j;
-                float t, progress;
-                bool playing;
-                WeatherMap.LoopAt(fr.Length, now, out i, out j, out t, out progress, out playing);
-                Bitmap a = MapArt.Frame(map, l.MapCrop, mw, mh, fr[i], true);
-                Bitmap b = t > 0 && j != i ? MapArt.Frame(map, l.MapCrop, mw, mh, fr[j], false) : null;
-                if (b == null) t = 0;   // not ready yet: stay on this picture (it is rendered below)
-                DrawPicture(g, a, mx, my, dim * (1 - t));
-                if (b != null) DrawPicture(g, b, mx, my, dim * t);
-                if (t > 0 && t < 1 && show > 0.004f) mapFading = true;   // a fade the PIN's veil hides needs no frames
-                DrawDetailFrames(g, l, ox, oy, fr, i, j, b != null ? t : 0, dim);
-
                 MapFrame shown = t < 0.5f ? fr[i] : fr[j];
                 string when = shown.Utc.ToLocalTime().ToString("t", CultureInfo.CurrentCulture).ToUpperInvariant();
                 float tw = Measure(g, when, l.Label.Font, l.Track);
@@ -1164,22 +1193,27 @@ namespace ClaudeCurtain
                 DrawPicture(g, MapArt.Shore(d, l.DetailCrop, dw, dh), dx, dy, show);
                 DrawPicture(g, MapArt.Overlay(d, l.DetailCrop, dw, dh, l.DetailOverlayKey, og => DrawDetailOverlay(og, l, dw, dh)), dx, dy, show);
             }
-            // at most one picture a frame, so a replay never waits
-            if (fr.Length > 0 && !MapArt.WarmOne(map, l.MapCrop, mw, mh, fr) && l.Detail.Width > 0 && map.Detail != null)
-                MapArt.WarmOne(map.Detail, l.DetailCrop, (int)Math.Round(l.Detail.Width), (int)Math.Round(l.Detail.Height), fr);
+            // at most one picture a frame, so a replay never waits: the map's, its fog's, then the close-up's
+            bool warmed = fr.Length > 0 && MapArt.WarmOne(map, l.MapCrop, mw, mh, fr);
+            if (!warmed && fog.Length > 0) warmed = MapArt.WarmOne(map, l.MapCrop, mw, mh, fog);
+            if (!warmed && l.Detail.Width > 0 && map.Detail != null)
+            {
+                int dw = (int)Math.Round(l.Detail.Width), dh = (int)Math.Round(l.Detail.Height);
+                warmed = fr.Length > 0 && MapArt.WarmOne(map.Detail, l.DetailCrop, dw, dh, fr);
+                if (!warmed && fog.Length > 0) MapArt.WarmOne(map.Detail, l.DetailCrop, dw, dh, fog);
+            }
         }
 
         /// <summary>The close-up's weather: the same pictures as the map, at the same moment of the loop.</summary>
-        private static void DrawDetailFrames(Graphics g, Layout l, float ox, float oy, MapFrame[] fr, int i, int j, float t, float dim)
+        private static void DrawDetailFrames(Graphics g, Layout l, float ox, float oy, MapFrame a, MapFrame b, float t,
+                                             MapFrame fa, MapFrame fb, float dim)
         {
             if (l.Detail.Width <= 0 || l.MapData.Detail == null) return;
             WeatherMap d = l.MapData.Detail;
             int dx = (int)Math.Round(ox + l.Detail.X), dy = (int)Math.Round(oy + l.Detail.Y);
             int dw = (int)Math.Round(l.Detail.Width), dh = (int)Math.Round(l.Detail.Height);
-            Bitmap a = MapArt.Frame(d, l.DetailCrop, dw, dh, fr[i], true);
-            Bitmap b = t > 0 && j != i ? MapArt.Frame(d, l.DetailCrop, dw, dh, fr[j], true) : null;
-            DrawPicture(g, a, dx, dy, dim * (b != null ? 1 - t : 1));
-            if (b != null) DrawPicture(g, b, dx, dy, dim * t);
+            Bitmap pic = MapArt.Weather(d, l.DetailCrop, dw, dh, a, b, t, fa, fb, t, dim);
+            if (pic != null) g.DrawImageUnscaled(pic, dx, dy);
         }
 
         /// <summary>How wide the radar's legend is ("LIGHT", five swatches, "HEAVY"), as DrawMapOverlay draws it.</summary>
@@ -1193,16 +1227,21 @@ namespace ClaudeCurtain
         /// <summary>
         /// The map's credit, fitted to room: where it would run into the legend (a narrow map, 2026-11-21), the
         /// public-domain sources drop out from the end of the list ("NOAA · USGS · CENSUS" go before anything
-        /// else), and the last one, OpenStreetMap's, whose licence asks for the credit, always stays.
+        /// else), and the credits that licences or terms ask for always stay: OpenStreetMap's, and SSEC
+        /// RealEarth's for the fog (2026-11-23).
         /// </summary>
         internal static string FitCredit(Graphics g, string credit, Font font, float tracking, float room)
         {
             const string Sep = "  ·  ";
             List<string> parts = new List<string>(credit.Split(new[] { Sep }, StringSplitOptions.None));
             string text = credit;
-            while (parts.Count > 1 && Measure(g, text, font, tracking) > room)
+            while (Measure(g, text, font, tracking) > room)
             {
-                parts.RemoveAt(parts.Count - 2);
+                int drop = -1;
+                for (int k = parts.Count - 1; k >= 0 && drop < 0; k--)
+                    if (parts[k].IndexOf('©') < 0 && !parts[k].StartsWith("SSEC", StringComparison.OrdinalIgnoreCase)) drop = k;
+                if (drop < 0) break;
+                parts.RemoveAt(drop);
                 text = string.Join(Sep, parts.ToArray());
             }
             return text;

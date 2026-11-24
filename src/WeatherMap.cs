@@ -103,9 +103,12 @@ namespace ClaudeCurtain
     internal sealed class MapFrame
     {
         public DateTime Utc;
-        public string Kind = "";   // "radar": dBZ (0 = nothing); "vis": visible brightness 0-255; "ir": infrared, colder = higher, 0-255
+        public string Kind = "";   // "radar": dBZ (0 = nothing); "vis": visible brightness 0-255; "ir": infrared, colder = higher, 0-255;
+                                   // "fog": the chance of fog or low cloud, percent
         public int W, H;
         public byte[] Values;      // row by row, north at the top
+        public GeoBox Box;         // the area it covers when not the map's own (the fog's web-map tiles); empty = the map's
+        public bool Mercator;      // rows spaced as on a web map (the fog's tiles), not evenly by latitude
 
         public string Id { get { return Kind + "@" + Utc.Ticks.ToString(CultureInfo.InvariantCulture); } }
     }
@@ -141,6 +144,11 @@ namespace ClaudeCurtain
         public string BaseId = "";
         public MapFrame[] Radar = new MapFrame[0];   // oldest first
         public MapFrame[] Sat = new MapFrame[0];     // oldest first, all one kind
+        // The chance of fog (2026-11-23, at the user's request: fog under the radar, "if it's pixelated smooth it
+        // out"): NOAA's GOES-West fog and low stratus product (IFR probability) from SSEC RealEarth, oldest first.
+        // Shown in either mode, as a soft veil under the radar or the clouds, at the moments the loop shows.
+        public MapFrame[] Fog = new MapFrame[0];
+        public const double FogStaleHours = 2;    // older fog is never shown (the product sometimes lags for hours)
         public MapStation[] Stations = new MapStation[0];
         public MapTide Tide;                      // null = no tide station near
         public MapAlert[] Alerts = new MapAlert[0];  // active alerts that reach the map, by number in map.txt
@@ -175,7 +183,8 @@ namespace ClaudeCurtain
 
         /// <summary>
         /// What map.txt lists. Lines: box S W N E | base FILE | dem Z X0 Y0 X1 Y1 (elevation tiles
-        /// dem-Z-X-Y.png) | radar UTC FILE | sat vis|ir UTC FILE | station ID LAT LON TEMP_F WIND_FROM WIND_MPH
+        /// dem-Z-X-Y.png) | radar UTC FILE | sat vis|ir UTC FILE | fogtiles Z X0 Y0 X1 Y1 (the web-map tiles each
+        /// fog picture is stitched from) | fog UTC FILE | station ID LAT LON TEMP_F WIND_FROM WIND_MPH
         /// GUST_MPH UTC ("-" for a value not reported) | tidestation ID LAT LON | tide UTC H|L FEET | credit TEXT.
         /// </summary>
         internal sealed class Index
@@ -192,9 +201,11 @@ namespace ClaudeCurtain
             public string Credit = "";
             public readonly List<KeyValuePair<DateTime, string>> Radar = new List<KeyValuePair<DateTime, string>>();
             public readonly List<KeyValuePair<DateTime, string>> Sat = new List<KeyValuePair<DateTime, string>>();
+            public readonly List<KeyValuePair<DateTime, string>> Fog = new List<KeyValuePair<DateTime, string>>();
             public readonly List<MapStation> Stations = new List<MapStation>();
             public string SatKind = "";
             public int DemZoom = -1, DemX0, DemY0, DemX1, DemY1;
+            public int FogZoom = -1, FogX0, FogY0, FogX1, FogY1;
             public MapTide Tide;
             public readonly SortedDictionary<int, MapAlert> Alerts = new SortedDictionary<int, MapAlert>();
             public readonly List<MapQuake> Quakes = new List<MapQuake>();
@@ -206,6 +217,7 @@ namespace ClaudeCurtain
                 foreach (string raw in lines ?? new string[0]) ix.Add(raw, true);
                 ix.Radar.Sort((a, b) => a.Key.CompareTo(b.Key));
                 ix.Sat.Sort((a, b) => a.Key.CompareTo(b.Key));
+                ix.Fog.Sort((a, b) => a.Key.CompareTo(b.Key));
                 if (ix.Tide != null)
                 {
                     ix.tides.Sort((a, b) => a.Key.CompareTo(b.Key));
@@ -277,6 +289,19 @@ namespace ClaudeCurtain
                                 ix.Sat.Add(new KeyValuePair<DateTime, string>(t, p[3]));
                             }
                             break;
+                        case "fog":
+                            if (p.Length == 3 && Utc(p[1], out t) && PlainName(p[2]) && ix.Fog.Count < 24) ix.Fog.Add(new KeyValuePair<DateTime, string>(t, p[2]));
+                            break;
+                        case "fogtiles":
+                        {
+                            int fz, fx0, fy0, fx1, fy1;
+                            if (p.Length == 6 && Whole(p[1], 1, 12, out fz) && Whole(p[2], 0, (1 << fz) - 1, out fx0) && Whole(p[3], 0, (1 << fz) - 1, out fy0) &&
+                                Whole(p[4], fx0, Math.Min((1 << fz) - 1, fx0 + 3), out fx1) && Whole(p[5], fy0, Math.Min((1 << fz) - 1, fy0 + 3), out fy1))
+                            {
+                                ix.FogZoom = fz; ix.FogX0 = fx0; ix.FogY0 = fy0; ix.FogX1 = fx1; ix.FogY1 = fy1;
+                            }
+                            break;
+                        }
                         case "credit":
                             ix.Credit = line.Substring(6).Trim();
                             break;
@@ -425,6 +450,19 @@ namespace ClaudeCurtain
                 }
                 m.Radar = radar.ToArray();
                 m.Sat = sat.ToArray();
+                List<MapFrame> fog = new List<MapFrame>();
+                if (ix.FogZoom > 0)
+                {
+                    GeoBox tiles = TileBox(ix.FogZoom, ix.FogX0, ix.FogY0, ix.FogX1, ix.FogY1);
+                    foreach (KeyValuePair<DateTime, string> e in ix.Fog)
+                    {
+                        if ((utcNow - e.Key).TotalHours > FogStaleHours || e.Key > utcNow.AddMinutes(10)) continue;
+                        if (!ReadPixels(Path.Combine(dir, e.Value), out px, out w, out h)) continue;
+                        if (w != 256 * (ix.FogX1 - ix.FogX0 + 1) || h != 256 * (ix.FogY1 - ix.FogY0 + 1)) continue;   // not the tiles it says
+                        fog.Add(new MapFrame { Utc = e.Key, Kind = "fog", W = w, H = h, Values = FogFrom(px), Box = tiles, Mercator = true });
+                    }
+                }
+                m.Fog = fog.ToArray();
                 m.Stations = ix.Stations.FindAll(st => (utcNow - st.Utc).TotalHours <= StationStaleHours).ToArray();
                 m.Tide = ix.Tide;
                 List<MapAlert> alerts = new List<MapAlert>();
@@ -446,6 +484,7 @@ namespace ClaudeCurtain
                             d.FrameBox = m.Box;
                             d.Radar = m.Radar;
                             d.Sat = m.Sat;
+                            d.Fog = m.Fog;
                             d.Key = d.MakeKey();
                             m.Detail = d;
                         }
@@ -734,17 +773,20 @@ namespace ClaudeCurtain
         {
             Func<MapFrame[], MapFrame[]> keep = all => Array.FindAll(all, f => (utcNow - f.Utc).TotalHours <= StaleHours);
             MapFrame[] r = keep(Radar), s = keep(Sat);
+            MapFrame[] fg = Array.FindAll(Fog, f => (utcNow - f.Utc).TotalHours <= FogStaleHours);
             MapStation[] st = Array.FindAll(Stations, x => (utcNow - x.Utc).TotalHours <= StationStaleHours);
-            if (r.Length == Radar.Length && s.Length == Sat.Length && st.Length == Stations.Length) return this;
+            if (r.Length == Radar.Length && s.Length == Sat.Length && fg.Length == Fog.Length && st.Length == Stations.Length) return this;
             WeatherMap m = (WeatherMap)MemberwiseClone();
             m.Radar = r;
             m.Sat = s;
+            m.Fog = fg;
             m.Stations = st;
             if (Detail != null)
             {
                 WeatherMap d = (WeatherMap)Detail.MemberwiseClone();
                 d.Radar = r;
                 d.Sat = s;
+                d.Fog = fg;
                 d.Key = d.MakeKey();
                 m.Detail = d;
             }
@@ -758,6 +800,7 @@ namespace ClaudeCurtain
             b.Append(Box).Append('|').Append(BaseId).Append('|').Append(DemId);
             foreach (MapFrame f in Radar) b.Append('|').Append(f.Id);
             foreach (MapFrame f in Sat) b.Append('|').Append(f.Id);
+            foreach (MapFrame f in Fog) b.Append('|').Append(f.Id);
             foreach (MapStation s in Stations)
                 b.Append('|').Append(s.Id).Append(' ').Append(s.TempF).Append(' ').Append(s.WindFrom).Append(' ').Append(s.WindMph).Append(' ').Append(s.GustMph);
             if (Tide != null) b.Append("|tide ").Append(Tide.Id).Append(' ').Append(Tide.Times.Length > 0 ? Tide.Times[0].Ticks : 0);
@@ -878,6 +921,73 @@ namespace ClaudeCurtain
             byte[] v = new byte[px.Length];
             for (int i = 0; i < px.Length; i++) v[i] = (byte)((px[i] >> 8) & 255);
             return v;
+        }
+
+        /// <summary>
+        /// The area web-map tiles X0..X1, Y0..Y1 at zoom Z cover (the usual tiling: x from the date line, y from
+        /// the north, rows spaced by the Mercator projection).
+        /// </summary>
+        internal static GeoBox TileBox(int z, int x0, int y0, int x1, int y1)
+        {
+            double n = Math.Pow(2, z);
+            Func<int, double> lat = y => Math.Atan(Math.Sinh(Math.PI * (1 - 2 * y / n))) * 180 / Math.PI;
+            return new GeoBox(lat(y1 + 1), x0 / n * 360 - 180, lat(y0), (x1 + 1) / n * 360 - 180);
+        }
+
+        internal static byte[] FogFrom(int[] px)
+        {
+            byte[] v = new byte[px.Length];
+            for (int i = 0; i < px.Length; i++) v[i] = FogPercent(px[i]);
+            return v;
+        }
+
+        /// <summary>
+        /// SSEC RealEarth's colours for the fog product back to the chance of fog, percent: black up to 9, a grey
+        /// ramp to 25, yellow through orange to red at 75, a darkening red to 100 (read off its legend,
+        /// 2026-11-23; the tiles use those colours exactly). Anything else, or a see-through pixel, is none.
+        /// </summary>
+        internal static byte FogPercent(int argb)
+        {
+            int a = (argb >> 24) & 255, r = (argb >> 16) & 255, g = (argb >> 8) & 255, b = argb & 255;
+            if (a < 128) return 0;
+            double p;
+            if (r == g && g == b) p = r == 0 ? 0 : 9.0 + r * 0.0611;
+            else if (r == 255 && b == 0) p = 24.2 + (255 - g) * 0.2008;
+            else if (g == 0 && b == 0 && r >= 120) p = 75.4 + (255 - r) * 0.2;
+            else p = 0;
+            return (byte)Math.Max(0, Math.Min(100, Math.Round(p)));
+        }
+
+        /// <summary>
+        /// The fog picture to show with a weather picture of the given time: the newest from up to five minutes
+        /// after it, else the oldest there is (fog drifts slowly, and the product can lag the radar).
+        /// </summary>
+        internal static MapFrame FogAt(MapFrame[] fog, DateTime utc)
+        {
+            if (fog == null || fog.Length == 0) return null;
+            MapFrame best = fog[0];
+            foreach (MapFrame f in fog) if (f.Utc <= utc.AddMinutes(5)) best = f;
+            return best;
+        }
+
+        public const int FogShowsPercent = 35;   // the header says FOG from here: the veil is plain by then (it starts at 30)
+
+        /// <summary>Whether a fog picture has fog (FogShowsPercent or more) anywhere inside the crop.</summary>
+        internal static bool FogInView(MapFrame f, GeoBox crop, GeoBox mapBox)
+        {
+            if (f == null || f.Values == null || f.W < 1 || f.H < 1) return false;
+            GeoBox b = f.Box.IsEmpty ? mapBox : f.Box;
+            if (b.IsEmpty) return false;
+            Func<double, int> col = lon => (int)Math.Floor((lon - b.West) / (b.East - b.West) * f.W);
+            Func<double, int> row = lat => f.Mercator
+                ? (int)Math.Floor((MapArt.MercatorY(b.North) - MapArt.MercatorY(lat)) / (MapArt.MercatorY(b.North) - MapArt.MercatorY(b.South)) * f.H)
+                : (int)Math.Floor((b.North - lat) / (b.North - b.South) * f.H);
+            int x0 = Math.Max(0, col(crop.West)), x1 = Math.Min(f.W - 1, col(crop.East));
+            int y0 = Math.Max(0, row(crop.North)), y1 = Math.Min(f.H - 1, row(crop.South));
+            for (int y = y0; y <= y1; y++)
+                for (int x = x0; x <= x1; x++)
+                    if (f.Values[y * f.W + x] >= FogShowsPercent) return true;
+            return false;
         }
 
         internal static byte[] RadarFrom(int[] px)
@@ -1075,9 +1185,13 @@ namespace ClaudeCurtain
 
         // ------------------------------------------------------------------ the replay
 
-        public const int StepMs = 700;      // the past hour plays on a loop: a picture every 0.7 s...
-        public const int FadeMs = 250;      // ...each cross-fading into the next...
-        public const int HoldMs = 1400;     // ...and the latest held two steps before the hour plays again
+        // The past hour plays on a loop: a picture every 0.7 s, each fading gradually into the next over the whole
+        // step (until 2026-11-23 each was held and then cross-faded in 250 ms; the user: "a gradual fade instead of
+        // frame-by-frame animation could help"), the latest fading back to the oldest a little quicker as each turn
+        // begins, and the latest held two steps before the hour plays again.
+        public const int StepMs = 700;
+        public const int FadeMs = 450;      // the turn's first fade, latest to oldest
+        public const int HoldMs = 1400;
 
         /// <summary>One turn of the loop for count pictures: the hold on the latest, then the hour played through.</summary>
         internal static long CycleFor(int count)
@@ -1103,16 +1217,17 @@ namespace ClaudeCurtain
             long q = p - start;
             if (q < FadeMs)
             {
-                i = count - 1; j = 0; fade = q / (float)FadeMs; progress = 0;
+                i = count - 1; j = 0; fade = (float)Smooth01(q / (double)FadeMs); progress = 0;
                 return;
             }
             q -= FadeMs;
             int k = (int)(q / StepMs);
             if (k >= count - 1) { playing = false; return; }
-            long r = q - (long)k * StepMs, hold = StepMs - FadeMs;
+            double s = (q - (long)k * StepMs) / (double)StepMs;
             i = k; j = k + 1;
-            fade = r < hold ? 0 : (r - hold) / (float)FadeMs;
-            progress = (k + fade) / (count - 1);
+            // eased, so the motion never stops yet each picture is whole for a moment as the fade passes it
+            fade = (float)Smooth01(s);
+            progress = (float)((k + s) / (count - 1));
         }
 
         // ------------------------------------------------------------------ the sample (previews and tests)
@@ -1294,6 +1409,34 @@ namespace ClaudeCurtain
             }
             m.Sat = sat.ToArray();
 
+            // Fog, as the real product gives it: the chance of fog in cells about 10 km across (blocks of the
+            // picture's own grid), high over the sea and up the river mouth, ebbing a little through the hour.
+            int gw = 240, gh = 130, block = 10;
+            List<MapFrame> fogFrames = new List<MapFrame>();
+            for (int f = 6; f >= 0; f--)
+            {
+                double ago = f * 10;
+                MapFrame fr = new MapFrame { Utc = Floor(nowUtc, 10).AddMinutes(-ago), Kind = "fog", W = gw, H = gh, Values = new byte[gw * gh] };
+                for (int by = 0; by < gh; by += block)
+                {
+                    for (int bx = 0; bx < gw; bx += block)
+                    {
+                        double xn = (bx + block / 2.0) / gw, yn = (by + block / 2.0) / gh;
+                        double coast = 0.23 + 0.022 * Math.Sin(yn * 5.3 + 0.4) + 0.011 * Math.Sin(yn * 13.7 + 1.1);
+                        double kmE = (xn - coast) * boxKmW;   // km inland
+                        double ry = 0.585 - 0.12 * (xn - 0.23) + 0.03 * Math.Sin(xn * 9.0 + 0.3);
+                        double reach = 8 + 0.05 * ago + 18 * Math.Exp(-Math.Abs(yn - ry) * boxKmH / 6);
+                        double pct = 92 / (1 + Math.Exp((kmE - reach) / 6.0)) * (0.85 + 0.3 * (Noise(xn * 12, yn * 6 + 2) - 0.5));
+                        if (kmE < -45) pct *= Math.Max(0, 1 - (-45 - kmE) / 20);   // the bank's outer edge, far out at sea
+                        byte v = (byte)Math.Max(0, Math.Min(100, Math.Round(pct)));
+                        for (int y = by; y < Math.Min(gh, by + block); y++)
+                            for (int x = bx; x < Math.Min(gw, bx + block); x++) fr.Values[y * gw + x] = v;
+                    }
+                }
+                fogFrames.Add(fr);
+            }
+            m.Fog = fogFrames.ToArray();
+
             // Stations: cool and windy on the coast, warmer inland, as on any summer coast.
             double[,] st =
             {
@@ -1380,7 +1523,7 @@ namespace ClaudeCurtain
             double cLat = Math.Round(lat, 1), cLon = Math.Round(lon, 1);
             WeatherMap c = new WeatherMap
             {
-                Box = new GeoBox(cLat - 0.1, cLon - 0.25, cLat + 0.1, cLon + 0.15), FrameBox = m.Box, Radar = m.Radar, Sat = m.Sat,
+                Box = new GeoBox(cLat - 0.1, cLon - 0.25, cLat + 0.1, cLon + 0.15), FrameBox = m.Box, Radar = m.Radar, Sat = m.Sat, Fog = m.Fog,
                 BaseId = "sample-detail", DemId = "sample-detail",
             };
             int w = 1600, h = 800;
@@ -1501,16 +1644,19 @@ namespace ClaudeCurtain
             public long Used;
             public Bitmap Base, Shore, Overlay;
             public string OverlayKey;
-            public readonly Dictionary<string, Bitmap> Frames = new Dictionary<string, Bitmap>();
+            public readonly Dictionary<string, int[]> Frames = new Dictionary<string, int[]>();   // premultiplied, at map size
+            public Bitmap Mix;      // the weather at this moment, blended from the frames on each paint
+            public int[] MixPx;
 
             public void Dispose()
             {
                 if (Base != null) Base.Dispose();
                 if (Shore != null) Shore.Dispose();
                 if (Overlay != null) Overlay.Dispose();
-                foreach (Bitmap b in Frames.Values) b.Dispose();
+                if (Mix != null) Mix.Dispose();
                 Frames.Clear();
-                Base = Shore = Overlay = null;
+                Base = Shore = Overlay = Mix = null;
+                MixPx = null;
             }
         }
 
@@ -1569,20 +1715,114 @@ namespace ClaudeCurtain
             }
         }
 
-        /// <summary>A weather picture at map size, rendered now if it is not ready and render is true (else null).</summary>
+        /// <summary>A weather picture at map size, as a new bitmap the caller disposes (previews and tests).</summary>
         internal static Bitmap Frame(WeatherMap m, GeoBox crop, int w, int h, MapFrame f, bool render)
         {
+            int[] px = Pixels(m, crop, w, h, f, render);
+            return px == null ? null : FromPixels(px, w, h);
+        }
+
+        /// <summary>A weather picture's pixels at map size, rendered now if not ready and render is true (else null).</summary>
+        private static int[] Pixels(WeatherMap m, GeoBox crop, int w, int h, MapFrame f, bool render)
+        {
+            if (f == null) return null;
             lock (gate)
             {
                 Entry e = Get(m, crop, w, h);
-                Bitmap b;
-                if (e.Frames.TryGetValue(f.Id, out b)) return b;
+                int[] px;
+                if (e.Frames.TryGetValue(f.Id, out px)) return px;
                 if (!render) return null;
-                b = RenderFrame(m, crop, w, h, f);
-                e.Frames[f.Id] = b;
+                px = RenderFrame(m, crop, w, h, f);
+                e.Frames[f.Id] = px;
                 Prune(e, m);
-                return b;
+                return px;
             }
+        }
+
+        /// <summary>
+        /// The weather over the map at one moment, as one picture: weather picture a fading into b by t (radar or
+        /// clouds), over the fog picture fa fading into fb by ft, all at alpha. Blended here pixel by pixel and
+        /// drawn once (2026-11-23): drawing two half-faded pictures over each other thins whatever the two share
+        /// in the middle of every fade, which a fade lasting the whole step would show as a slow pulse; and
+        /// GDI+'s faded drawing is slow besides. Pictures not rendered yet are left out, except a, which is
+        /// rendered now. The bitmap is reused for the next moment: draw it before asking again.
+        /// </summary>
+        internal static Bitmap Weather(WeatherMap m, GeoBox crop, int w, int h, MapFrame a, MapFrame b, float t,
+                                       MapFrame fa, MapFrame fb, float ft, float alpha)
+        {
+            if (w < 1 || h < 1 || alpha <= 0.004f) return null;
+            int[] pa = Pixels(m, crop, w, h, a, true), pb = Pixels(m, crop, w, h, b, false);
+            int[] qa = Pixels(m, crop, w, h, fa, true), qb = Pixels(m, crop, w, h, fb, false);
+            if (pb == null) t = 0;
+            if (qb == null) ft = 0;
+            if (pa == null && qa == null) return null;
+            lock (gate)
+            {
+                Entry e = Get(m, crop, w, h);
+                if (e.MixPx == null || e.MixPx.Length != w * h) e.MixPx = new int[w * h];
+                Compose(e.MixPx, pa, pb, t, qa, qb, ft, alpha);
+                if (e.Mix == null || e.Mix.Width != w || e.Mix.Height != h)
+                {
+                    if (e.Mix != null) e.Mix.Dispose();
+                    e.Mix = new Bitmap(w, h, PixelFormat.Format32bppPArgb);
+                }
+                BitmapData d = e.Mix.LockBits(new Rectangle(0, 0, w, h), ImageLockMode.WriteOnly, PixelFormat.Format32bppPArgb);
+                try
+                {
+                    if (d.Stride == w * 4) Marshal.Copy(e.MixPx, 0, d.Scan0, w * h);
+                    else for (int y = 0; y < h; y++) Marshal.Copy(e.MixPx, y * w, IntPtr.Add(d.Scan0, y * d.Stride), w);
+                }
+                finally
+                {
+                    e.Mix.UnlockBits(d);
+                }
+                return e.Mix;
+            }
+        }
+
+        /// <summary>
+        /// dst = (a fading into b by t) over (fa fading into fb by ft), times alpha; premultiplied pixels, any of
+        /// them null for none. Fast where both layers are empty, which is most of a radar picture.
+        /// </summary>
+        internal static void Compose(int[] dst, int[] a, int[] b, float t, int[] fa, int[] fb, float ft, float alpha)
+        {
+            alpha = Clamp01(alpha);
+            int wa = (int)(256 * alpha * (1 - Clamp01(t)) + 0.5f), wb = (int)(256 * alpha * Clamp01(t) + 0.5f);
+            int fwa = (int)(256 * alpha * (1 - Clamp01(ft)) + 0.5f), fwb = (int)(256 * alpha * Clamp01(ft) + 0.5f);
+            if (wa + wb > 256) wb = 256 - wa;
+            if (fwa + fwb > 256) fwb = 256 - fwa;
+            if (b == null) { b = a; wa += wb; wb = 0; }
+            if (fb == null) { fb = fa; fwa += fwb; fwb = 0; }
+            int n = dst.Length;
+            for (int i = 0; i < n; i++)
+            {
+                int x = a != null ? a[i] : 0, y = wb > 0 ? b[i] : 0;
+                int top = (x | y) == 0 ? 0 : Mix(x, y, wa, wb);
+                int fx = fa != null ? fa[i] : 0, fy = fwb > 0 ? fb[i] : 0;
+                if ((fx | fy) != 0) top = Over(top, Mix(fx, fy, fwa, fwb));
+                dst[i] = top;
+            }
+        }
+
+        // Two premultiplied pixels weighted wx and wy (out of 256 together, at most), two channels at a time.
+        private static int Mix(int x, int y, int wx, int wy)
+        {
+            uint ux = (uint)x, uy = (uint)y;
+            uint rb = (((ux & 0x00FF00FFu) * (uint)wx + (uy & 0x00FF00FFu) * (uint)wy) >> 8) & 0x00FF00FFu;
+            uint ag = ((((ux >> 8) & 0x00FF00FFu) * (uint)wx + ((uy >> 8) & 0x00FF00FFu) * (uint)wy)) & 0xFF00FF00u;
+            return (int)(rb | ag);
+        }
+
+        // A premultiplied pixel over another.
+        private static int Over(int top, int under)
+        {
+            uint t = (uint)top, u = (uint)under;
+            if (t == 0) return under;
+            uint keep = 255 - (t >> 24);
+            if (keep == 0) return top;
+            uint rb = (((u & 0x00FF00FFu) * keep + 0x00800080u) >> 8) & 0x00FF00FFu;
+            uint ag = ((((u >> 8) & 0x00FF00FFu) * keep + 0x00800080u)) & 0xFF00FF00u;
+            return (int)(t + (rb | ag));
         }
 
         /// <summary>Renders one picture that is not ready yet, so a replay never has to wait. True if it did.</summary>
@@ -1603,13 +1843,14 @@ namespace ClaudeCurtain
 
         private static void Prune(Entry e, WeatherMap m)
         {
-            if (e.Frames.Count <= m.Radar.Length + m.Sat.Length) return;
+            if (e.Frames.Count <= m.Radar.Length + m.Sat.Length + m.Fog.Length) return;
             HashSet<string> live = new HashSet<string>();
             foreach (MapFrame f in m.Radar) live.Add(f.Id);
             foreach (MapFrame f in m.Sat) live.Add(f.Id);
+            foreach (MapFrame f in m.Fog) live.Add(f.Id);
             List<string> gone = new List<string>();
             foreach (string id in e.Frames.Keys) if (!live.Contains(id)) gone.Add(id);
-            foreach (string id in gone) { e.Frames[id].Dispose(); e.Frames.Remove(id); }
+            foreach (string id in gone) e.Frames.Remove(id);
         }
 
         /// <summary>Where each column and row of the map falls in a grid that covers the whole box.</summary>
@@ -1900,36 +2141,127 @@ namespace ClaudeCurtain
             return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty;
         }
 
-        private static Bitmap RenderFrame(WeatherMap m, GeoBox crop, int w, int h, MapFrame f)
+        /// <summary>
+        /// The fog product's cells are about this many of its tiles' pixels across (zoom 7, RealEarth's finest,
+        /// about 1 km a pixel here; the cells about 10 km), so the fog is smoothed by its cells, not its pixels.
+        /// </summary>
+        public const float FogCellPixels = 9.5f;
+
+        /// <summary>
+        /// One weather picture at map size, premultiplied. The picture's cells are interpolated with a cubic
+        /// (Catmull-Rom) curve, which passes through every cell's own value, so smoothing never moves rain or
+        /// fog; until 2026-11-23 straight-line blending left diamond-shaped steps at the edge of the rain (the
+        /// user: "if it's pixelated smooth it out ... as smooth as possible without greatly obscuring
+        /// accuracy"). Then a light blur, by the cell's size on screen: radar about a quarter of a cell on the
+        /// map and a third in the close-up (where a 1 km cell is 80 pixels, so showers come out as round as
+        /// they are), clouds only where blown up, and the fog, whose cells are about 10 km, about a third of
+        /// its cell, so it reads as a soft bank rather than squares.
+        /// </summary>
+        private static int[] RenderFrame(WeatherMap m, GeoBox crop, int w, int h, MapFrame f)
         {
             float[] fx, fy;
-            GeoBox fb = m.FrameBox.IsEmpty ? m.Box : m.FrameBox;   // the close-up plays the big map's pictures
+            GeoBox fb = !f.Box.IsEmpty ? f.Box : (m.FrameBox.IsEmpty ? m.Box : m.FrameBox);   // the close-up plays the big map's pictures
             Mapping(fb, crop, w, h, f.W, f.H, 0.5f, out fx, out fy);
+            if (f.Mercator) MercatorRows(fb, crop, h, f.H, fy);
             int[] px = new int[w * h];
-            bool radar = f.Kind == "radar";
+            bool radar = f.Kind == "radar", fog = f.Kind == "fog";
             float gain = 1f;
             if (f.Kind == "vis")
             {
                 double elev = CurtainPainter.SunElevation(f.Utc, (crop.North + crop.South) / 2, (crop.West + crop.East) / 2);
                 gain = VisibleGain(elev);
             }
-            int[] lut = new int[256];
-            for (int v = 0; v < 256; v++) lut[v] = radar ? RadarArgb(v) : CloudArgb(f.Kind, v * gain);
+            float[] val = Cubic(f.Values, f.W, f.H, fx, fy, w, h);
+            float cellPx = (float)(w * (fb.East - fb.West) / Math.Max(1, f.W) / Math.Max(1e-9, crop.East - crop.West));
+            int radius = 0, passes = 2;
+            if (radar) radius = (int)Math.Round(cellPx * (cellPx >= 8 ? 0.35f : 0.25f));
+            else if (fog) { radius = (int)Math.Round(cellPx * FogCellPixels * 0.3f); passes = 3; }
+            else if (cellPx >= 4) radius = (int)Math.Round(cellPx * 0.2f);
+            radius = Math.Min(radius, Math.Max(w, h));
+            if (radius >= 1) for (int pass = 0; pass < passes; pass++) val = BoxBlur(val, w, h, radius);
+            if (radar)
+            {
+                for (int i = 0; i < w * h; i++) px[i] = RadarArgb(val[i]);
+            }
+            else
+            {
+                int[] lut = new int[256];
+                for (int v = 0; v < 256; v++) lut[v] = fog ? FogArgb(v) : CloudArgb(f.Kind, v * gain);
+                for (int i = 0; i < w * h; i++) px[i] = lut[Math.Max(0, Math.Min(255, (int)(val[i] + 0.5f)))];
+            }
+            return px;
+        }
+
+        /// <summary>Rows for a picture whose rows are spaced as on a web map (Mercator), over its box.</summary>
+        private static void MercatorRows(GeoBox box, GeoBox crop, int h, int gh, float[] fy)
+        {
+            double top = MercatorY(box.North), bottom = MercatorY(box.South);
+            for (int y = 0; y < h; y++)
+            {
+                double lat = crop.North - (y + 0.5) / h * (crop.North - crop.South);
+                fy[y] = (float)((top - MercatorY(lat)) / (top - bottom) * gh - 0.5);
+            }
+        }
+
+        internal static double MercatorY(double lat)
+        {
+            double r = Math.Max(-85, Math.Min(85, lat)) * Math.PI / 180;
+            return Math.Log(Math.Tan(Math.PI / 4 + r / 2));
+        }
+
+        /// <summary>
+        /// A picture's values at each screen pixel, interpolated with a cubic curve (Catmull-Rom) along rows
+        /// and then columns: smooth, and exact at each cell's own value. Clamped to 0..255 (the curve overshoots
+        /// a little at sharp edges).
+        /// </summary>
+        internal static float[] Cubic(byte[] v, int gw, int gh, float[] fx, float[] fy, int w, int h)
+        {
+            int[] cx = new int[w * 4], cy = new int[h * 4];
+            float[] wx = new float[w * 4], wy = new float[h * 4];
+            for (int x = 0; x < w; x++) CubicTaps(fx[x], gw, cx, wx, x * 4);
+            for (int y = 0; y < h; y++) CubicTaps(fy[y], gh, cy, wy, y * 4);
+            int lo = gh - 1, hi = 0;
+            for (int k = 0; k < cy.Length; k++) { lo = Math.Min(lo, cy[k]); hi = Math.Max(hi, cy[k]); }
+            if (hi < lo) hi = lo;
+            // each source row the screen needs, interpolated across once
+            float[] rows = new float[(hi - lo + 1) * w];
+            for (int sy = lo; sy <= hi; sy++)
+            {
+                int src = sy * gw, dst = (sy - lo) * w;
+                for (int x = 0; x < w; x++)
+                {
+                    int k = x * 4;
+                    rows[dst + x] = v[src + cx[k]] * wx[k] + v[src + cx[k + 1]] * wx[k + 1] + v[src + cx[k + 2]] * wx[k + 2] + v[src + cx[k + 3]] * wx[k + 3];
+                }
+            }
             float[] val = new float[w * h];
             for (int y = 0; y < h; y++)
-                for (int x = 0; x < w; x++)
-                    val[y * w + x] = Bilinear(f.Values, f.W, f.H, fx[x], fy[y]);
-            // Blown up a lot (the close-up: a radar cell 1 km across is 15 pixels or more), straight-line blending
-            // leaves diamond-shaped steps at the edge of the rain; softened by about a third of a cell, the
-            // showers come out as round as they are (2026-11-21).
-            float cellPx = (float)(w * (fb.East - fb.West) / Math.Max(1, f.W) / Math.Max(1e-9, crop.East - crop.West));
-            if (cellPx >= 8)
             {
-                int radius = Math.Max(1, (int)Math.Round(cellPx * 0.35f));
-                for (int pass = 0; pass < 2; pass++) val = BoxBlur(val, w, h, radius);
+                int k = y * 4;
+                int r0 = (cy[k] - lo) * w, r1 = (cy[k + 1] - lo) * w, r2 = (cy[k + 2] - lo) * w, r3 = (cy[k + 3] - lo) * w;
+                float w0 = wy[k], w1 = wy[k + 1], w2 = wy[k + 2], w3 = wy[k + 3];
+                int row = y * w;
+                for (int x = 0; x < w; x++)
+                {
+                    float s = rows[r0 + x] * w0 + rows[r1 + x] * w1 + rows[r2 + x] * w2 + rows[r3 + x] * w3;
+                    val[row + x] = s < 0 ? 0 : (s > 255 ? 255 : s);
+                }
             }
-            for (int i = 0; i < w * h; i++) px[i] = radar ? RadarArgb(val[i]) : lut[Math.Max(0, Math.Min(255, (int)(val[i] + 0.5f)))];
-            return FromPixels(px, w, h);
+            return val;
+        }
+
+        // The four cells around position p (clamped to the picture) and their Catmull-Rom weights.
+        private static void CubicTaps(float p, int n, int[] idx, float[] wt, int at)
+        {
+            if (p < 0) p = 0;
+            if (p > n - 1) p = n - 1;
+            int i = (int)Math.Floor(p);
+            float t = p - i, t2 = t * t, t3 = t2 * t;
+            wt[at] = 0.5f * (-t3 + 2 * t2 - t);
+            wt[at + 1] = 0.5f * (3 * t3 - 5 * t2 + 2);
+            wt[at + 2] = 0.5f * (-3 * t3 + 4 * t2 + t);
+            wt[at + 3] = 0.5f * (t3 - t2);
+            for (int k = 0; k < 4; k++) idx[at + k] = Math.Max(0, Math.Min(n - 1, i - 1 + k));
         }
 
         /// <summary>Evens out the visible picture through the day: a low sun lights clouds dimly.</summary>
@@ -1961,6 +2293,21 @@ namespace ClaudeCurtain
         {
             float a = kind == "ir" ? Smooth((v - 122f) / 66f) : Smooth((v - 62f) / 118f);
             return Premul(CloudTone, a * 0.84f);
+        }
+
+        /// <summary>
+        /// How thick the fog's veil gets: the ground, the water and any rain stay readable through it (0.42 made
+        /// a bank over the whole sea a flat grey slab).
+        /// </summary>
+        public const float FogMax = 0.30f;
+
+        /// <summary>
+        /// The chance of fog (percent) as a premultiplied colour, in the clouds' own warm white: nothing below
+        /// 30%, then a veil thickening to FogMax at 70% and over.
+        /// </summary>
+        internal static int FogArgb(float percent)
+        {
+            return Premul(CloudTone, FogMax * Smooth((percent - 30f) / 40f));
         }
 
         // ------------------------------------------------------------------ pixels

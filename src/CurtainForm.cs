@@ -214,6 +214,11 @@ namespace ClaudeCurtain
         /// <summary>True while this window's painter is in the middle of an animation.</summary>
         public bool Animating { get { return painter.NeedsFastFrames; } }
 
+        /// <summary>While animating: the least time between repaints, and the part that changes (empty: all).</summary>
+        public int FrameIntervalMs { get { return painter.FrameIntervalMs; } }
+        public Rectangle AnimatedArea { get { return painter.AnimatedArea; } }
+        internal int LastFrameAt;   // Environment.TickCount of the last fast-frame repaint (CurtainUi's frame timer)
+
         /// <summary>Previews: the painter itself, to drive it with a fixed clock.</summary>
         internal CurtainPainter Painter { get { return painter; } }
 
@@ -330,7 +335,9 @@ namespace ClaudeCurtain
         private readonly List<CurtainForm> forms = new List<CurtainForm>();
         private readonly System.Windows.Forms.Timer timer = new System.Windows.Forms.Timer();
         // Runs only while a short animation plays (fade-in, minute cross-fade, PIN dots, wrong-PIN shake), so
-        // the screen repaints at ~60 frames a second then and at the 200 ms tick the rest of the time.
+        // the screen repaints at ~60 frames a second then and at the 200 ms tick the rest of the time; and while
+        // the map's replay fades (most of each turn of its loop), when that is all that moves, at ~28 a second
+        // and only the map's part of the window.
         private readonly System.Windows.Forms.Timer frames = new System.Windows.Forms.Timer();
         private readonly PinGate gate;
         private readonly InputHooks hooks;
@@ -404,9 +411,16 @@ namespace ClaudeCurtain
             frames.Tick += delegate
             {
                 bool any = false;
+                int now = Environment.TickCount;
                 foreach (CurtainForm f in forms)
                 {
-                    if (f.Animating) { any = true; f.Invalidate(); }
+                    if (!f.Animating) continue;
+                    any = true;
+                    // the map's replay, when it is all that moves, repaints less often and only where it is
+                    if (unchecked(now - f.LastFrameAt) < f.FrameIntervalMs) continue;
+                    f.LastFrameAt = now;
+                    Rectangle area = f.AnimatedArea;
+                    if (area.IsEmpty) f.Invalidate(); else f.Invalidate(area);
                 }
                 if (!any) frames.Stop();
             };

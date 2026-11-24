@@ -234,6 +234,160 @@ namespace ClaudeCurtain
                   wokeUncounted.Unlocked && wokeUncounted.Gate.UnlockKeys == 0);
         }
 
+        /// <summary>The fog (2026-11-23), the smoothing of the weather pictures, and the replay's blend.</summary>
+        private static void TestFog(Options o)
+        {
+            System.Globalization.CultureInfo inv = System.Globalization.CultureInfo.InvariantCulture;
+            Check("fog: RealEarth's colours read back as the chance of fog (black none, greys to 25, yellow to red to 75, a darker red to 100; see-through or other colours none)",
+                  WeatherMap.FogPercent(unchecked((int)0xFF000000)) == 0 && WeatherMap.FogPercent(unchecked((int)0xFF111111)) == 10 &&
+                  WeatherMap.FogPercent(unchecked((int)0xFFEEEEEE)) == 24 && WeatherMap.FogPercent(unchecked((int)0xFFFFDB00)) == 31 &&
+                  WeatherMap.FogPercent(unchecked((int)0xFFFF7A00)) == 51 && WeatherMap.FogPercent(unchecked((int)0xFFFF0000)) == 75 &&
+                  WeatherMap.FogPercent(unchecked((int)0xFF870000)) == 99 && WeatherMap.FogPercent(0x00FFDB00) == 0 &&
+                  WeatherMap.FogPercent(unchecked((int)0xFF0080FF)) == 0);
+
+            GeoBox tiles = WeatherMap.TileBox(7, 20, 45, 21, 46);
+            Check("fog: web-map tiles 20-21 x 45-46 at zoom 7 cover 123.75 to 118.125 W and 43.069 to 47.040 N",
+                  Math.Abs(tiles.West + 123.75) < 1e-9 && Math.Abs(tiles.East + 118.125) < 1e-9 &&
+                  Math.Abs(tiles.North - 47.04018) < 1e-4 && Math.Abs(tiles.South - 43.06889) < 1e-4);
+
+            WeatherMap.Index fx = WeatherMap.Index.Parse(new[]
+            {
+                "box 44.4 -123.5 45.6 -120.5", "base b.png",
+                "fogtiles 7 20 45 21 46",
+                "fogtiles 7 20 45 29 46",
+                "fog 2026-11-23T20:10:00Z fog-b.png",
+                "fog 2026-11-23T20:00:00Z fog-a.png",
+                "fog 2026-11-23T19:50:00Z ..\\fog-x.png",
+                "fog nonsense",
+            });
+            Check("fog: map.txt's lines are read (its tiles, its pictures oldest first; a path, a bad line and a span of too many tiles refused)",
+                  fx.FogZoom == 7 && fx.FogX0 == 20 && fx.FogX1 == 21 && fx.FogY0 == 45 && fx.FogY1 == 46 && fx.Fog.Count == 2 && fx.Fog[0].Value == "fog-a.png");
+
+            string dir = Path.Combine(o.LocalDir, "selftest-fog-" + Process.GetCurrentProcess().Id);
+            try
+            {
+                Directory.CreateDirectory(dir);
+                DateTime now = new DateTime(2026, 11, 23, 20, 15, 0, DateTimeKind.Utc);
+                SaveSolid(Path.Combine(dir, "base.png"), 40, 20, (x, y) => Color.FromArgb(72, 72, 72));
+                SaveSolid(Path.Combine(dir, "fog-new.png"), 512, 512, (x, y) => x < 256 ? Color.FromArgb(255, 122, 0) : Color.Black);
+                SaveSolid(Path.Combine(dir, "fog-old.png"), 512, 512, (x, y) => Color.FromArgb(255, 122, 0));
+                SaveSolid(Path.Combine(dir, "fog-small.png"), 256, 256, (x, y) => Color.FromArgb(255, 122, 0));
+                File.WriteAllLines(Path.Combine(dir, WeatherMap.IndexName), new[]
+                {
+                    "box 44.4 -123.5 45.6 -120.5", "base base.png", "fogtiles 7 20 45 21 46",
+                    "fog 2026-11-23T17:00:00Z fog-old.png",
+                    "fog 2026-11-23T20:10:00Z fog-new.png",
+                    "fog 2026-11-23T20:00:00Z fog-small.png",
+                }, Encoding.UTF8);
+                WeatherMap m = WeatherMap.Load(dir, now);
+                Check("fog: its pictures load as the chance of fog over their tiles, rows spaced as on a web map; one over 2 hours old and one of the wrong size are skipped",
+                      m != null && m.Fog.Length == 1 && m.Fog[0].Mercator && m.Fog[0].Values[0] == 51 && m.Fog[0].Values[300] == 0 &&
+                      Math.Abs(m.Fog[0].Box.West + 123.75) < 1e-9 && m.Key.Contains("fog@"));
+                Check("fog: it drops out as it grows old, without a reload", m != null && m.Fresh(now.AddHours(2.1)).Fog.Length == 0);
+            }
+            finally
+            {
+                try { Directory.Delete(dir, true); } catch { }
+            }
+
+            DateTime t0 = new DateTime(2026, 11, 23, 20, 0, 0, DateTimeKind.Utc);
+            MapFrame[] fogs = { new MapFrame { Utc = t0, Kind = "fog" }, new MapFrame { Utc = t0.AddMinutes(10), Kind = "fog" }, new MapFrame { Utc = t0.AddMinutes(20), Kind = "fog" } };
+            Check("fog: each weather picture gets the fog of its moment (the newest up to 5 minutes after it), else the oldest",
+                  WeatherMap.FogAt(fogs, t0.AddMinutes(12)) == fogs[1] && WeatherMap.FogAt(fogs, t0.AddMinutes(16)) == fogs[2] &&
+                  WeatherMap.FogAt(fogs, t0.AddMinutes(-30)) == fogs[0] && WeatherMap.FogAt(fogs, t0.AddHours(3)) == fogs[2] &&
+                  WeatherMap.FogAt(new MapFrame[0], t0) == null);
+            Check("fog: its veil starts above 30% and thickens to at most " + MapArt.FogMax.ToString("0.00", inv) + ", so the ground and the rain show through",
+                  MapArt.FogArgb(25) == 0 && MapArt.FogArgb(30) == 0 && ((MapArt.FogArgb(50) >> 24) & 255) > 20 &&
+                  ((MapArt.FogArgb(100) >> 24) & 255) == (int)(MapArt.FogMax * 255 + 0.5f));
+
+            // A band of fog at 45 N in the tiles' own rows: on a map of 44.5 to 45.5 N it shows half way down.
+            {
+                double top = MapArt.MercatorY(tiles.North), bottom = MapArt.MercatorY(tiles.South);
+                MapFrame band = new MapFrame { Utc = t0, Kind = "fog", W = 512, H = 512, Values = new byte[512 * 512], Box = tiles, Mercator = true };
+                for (int y = 0; y < 512; y++)
+                {
+                    double lat = Math.Atan(Math.Sinh(top - (y + 0.5) / 512 * (top - bottom))) * 180 / Math.PI;
+                    if (lat > 44.9 && lat < 45.1) for (int x = 0; x < 512; x++) band.Values[y * 512 + x] = 100;
+                }
+                WeatherMap fm = new WeatherMap { Box = new GeoBox(44.4, -123.5, 45.6, -120.5), BaseW = 2, BaseH = 2, Water = new byte[4], BaseId = "selftest-fog", Fog = new[] { band } };
+                using (Bitmap pic = MapArt.Frame(fm, new GeoBox(44.5, -122.5, 45.5, -121.5), 200, 200, band, true))
+                {
+                    // the veil is flat where the fog is thick, so take the middle of its thickest rows
+                    int bestA = -1, first = -1, last = -1;
+                    for (int y = 0; y < 200; y++) bestA = Math.Max(bestA, pic.GetPixel(100, y).A);
+                    for (int y = 0; y < 200; y++) if (pic.GetPixel(100, y).A >= bestA - 1) { if (first < 0) first = y; last = y; }
+                    int mid = (first + last) / 2;
+                    Check("fog: its tiles' rows land at the right latitude (a band at 45 N shows half way down a map of 44.5 to 45.5 N: row " + mid + " of 200)",
+                          bestA > 50 && Math.Abs(mid - 100) <= 3);
+                }
+            }
+
+            // A diagonal edge of rain, a staircase of whole cells in the picture, at 5 pixels a cell (the map's
+            // scale): smoothed, its edge comes out a straight line, not steps.
+            {
+                MapFrame stairs = new MapFrame { Utc = t0, Kind = "radar", W = 60, H = 60, Values = new byte[3600] };
+                for (int y = 0; y < 60; y++) for (int x = 0; x < 60; x++) if (x + y < 60) stairs.Values[y * 60 + x] = 40;
+                WeatherMap sm = new WeatherMap { Box = new GeoBox(44, -123, 45, -122), BaseW = 2, BaseH = 2, Water = new byte[4], BaseId = "selftest-stairs", Radar = new[] { stairs } };
+                using (Bitmap pic = MapArt.Frame(sm, new GeoBox(44.2, -122.8, 44.8, -122.2), 180, 180, stairs, true))
+                {
+                    int full = pic.GetPixel(2, 2).A;
+                    List<double> xs = new List<double>(), ys = new List<double>();
+                    for (int y = 25; y < 155; y++)
+                    {
+                        for (int x = 1; x < 180; x++)
+                        {
+                            int a0 = pic.GetPixel(x - 1, y).A, a1 = pic.GetPixel(x, y).A;
+                            if (a0 >= full / 2.0 && a1 < full / 2.0) { xs.Add(x - 1 + (a0 - full / 2.0) / Math.Max(1, a0 - a1)); ys.Add(y); break; }
+                        }
+                    }
+                    double worst = 99;
+                    if (xs.Count > 10)
+                    {
+                        double my = 0, mx = 0, sxy = 0, syy = 0;
+                        for (int k = 0; k < xs.Count; k++) { my += ys[k]; mx += xs[k]; }
+                        my /= xs.Count;
+                        mx /= xs.Count;
+                        for (int k = 0; k < xs.Count; k++) { sxy += (ys[k] - my) * (xs[k] - mx); syy += (ys[k] - my) * (ys[k] - my); }
+                        double slope = sxy / syy;
+                        worst = 0;
+                        for (int k = 0; k < xs.Count; k++) worst = Math.Max(worst, Math.Abs(xs[k] - (mx + slope * (ys[k] - my))));
+                    }
+                    Check("radar: smoothed, a staircase of whole cells comes out a straight edge (largest miss " + worst.ToString("0.00", inv) +
+                          " px at 5 px a cell)", xs.Count > 100 && worst < 0.6);
+                }
+            }
+
+            // The replay's blend: a picture fading into itself stays itself (no thinning mid-fade); rain over fog.
+            {
+                int[] a = { 0, unchecked((int)0x80402010), unchecked((int)0xFF80C0FF), 0x01010101 }, dst = new int[4];
+                MapArt.Compose(dst, a, a, 0.5f, null, null, 0, 1f);
+                bool same = true;
+                for (int k = 0; k < 4; k++) for (int sh = 0; sh < 32; sh += 8) if (Math.Abs(((dst[k] >> sh) & 255) - ((a[k] >> sh) & 255)) > 1) same = false;
+                int rain = unchecked((int)0xFF4A6882), fogPx = MapArt.FogArgb(90);
+                int[] d2 = new int[2];
+                MapArt.Compose(d2, new[] { rain, 0 }, null, 0, new[] { fogPx, fogPx }, null, 0, 1f);
+                Check("map: the weather is blended into one picture: a picture fading into itself stays itself mid-fade, rain covers fog, fog shows where there is no rain",
+                      same && d2[0] == rain && d2[1] == fogPx);
+            }
+
+            // The sample: fog on its coast, said in the header; the blend quick enough to run every frame.
+            {
+                DisplayState rs = CurtainPreview.Sample(new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") }, "radar");
+                bool header = CurtainPainter.TextOpsForTest(rs, 2560, 1440).Exists(kv => kv.Key.StartsWith("RADAR", StringComparison.Ordinal) && kv.Key.Contains("FOG"));
+                Check("fog: the sample has fog on its coast, and the map's header says so (RADAR · FOG · PAST HOUR)", rs.Map.Fog.Length >= 2 && header);
+                WeatherMap wm = rs.Map;
+                int w = 1092, h = 675;
+                MapFrame ra = wm.Radar[0], rb = wm.Radar[1], fa = wm.Fog[0], fb = wm.Fog[1];
+                foreach (MapFrame f in new[] { ra, rb, fa, fb }) using (MapArt.Frame(wm, wm.Box, w, h, f, true)) { }
+                MapArt.Weather(wm, wm.Box, w, h, ra, rb, 0.5f, fa, fb, 0.5f, 1f);
+                Stopwatch sw = Stopwatch.StartNew();
+                for (int k = 0; k < 10; k++) MapArt.Weather(wm, wm.Box, w, h, ra, rb, 0.1f * k, fa, fb, 0.1f * k, 1f);
+                double ms = sw.Elapsed.TotalMilliseconds / 10;
+                lines.Add("INFO  blending a frame of the replay at 1092 x 675 takes " + ms.ToString("0.0", inv) + " ms");
+                Check("map: blending a frame of the replay at 1092 x 675 takes under 12 ms (" + ms.ToString("0.0", inv) + " ms)", ms < 12);
+            }
+        }
+
         private static void TestKeyQueue()
         {
             KeyQueue q = new KeyQueue();
@@ -902,6 +1056,8 @@ namespace ClaudeCurtain
                 try { Directory.Delete(dir, true); } catch { }
             }
 
+            TestFog(o);
+
             // Radar or clouds.
             {
                 GeoBox box = new GeoBox(44.4, -123.5, 45.6, -120.5);
@@ -978,6 +1134,21 @@ namespace ClaudeCurtain
                 WeatherMap.LoopAt(1, start + 100, out i, out j, out t, out progress, out playing);
                 Check("map: the replay loops: it plays the past hour in order, ends on the latest, holds it two steps and plays again",
                       rests && wraps && forward && ends && i == 0 && !playing && WeatherMap.HoldMs <= 2 * WeatherMap.StepMs && cycle < 8000);
+                // the fade runs through each whole step (2026-11-23): never a jump, and no picture held still for long
+                int still = 0, samples = 0;
+                float lastPos = -1;
+                bool gradual = true;
+                for (long ms = start + WeatherMap.FadeMs; ms < cycle - 10; ms += 10)
+                {
+                    WeatherMap.LoopAt(8, ms, out i, out j, out t, out progress, out playing);
+                    samples++;
+                    if (t < 0.02f || t > 0.98f) still++;
+                    float pos = i + t;
+                    if (lastPos >= 0 && (pos < lastPos - 1e-4f || pos - lastPos > 0.05f)) gradual = false;
+                    lastPos = pos;
+                }
+                Check("map: the replay fades gradually through each whole step, eased, never jumping (each picture whole " + (100 * still / Math.Max(1, samples)) + "% of the time)",
+                      gradual && still * 100 / Math.Max(1, samples) < 25);
             }
 
             // The sun's height, for evening out the visible picture.
@@ -1002,6 +1173,10 @@ namespace ClaudeCurtain
                 p.FixedNowMs = turn + WeatherMap.HoldMs + WeatherMap.StepMs + WeatherMap.FadeMs + (WeatherMap.StepMs - WeatherMap.FadeMs) + WeatherMap.FadeMs / 2;
                 p.Paint(g, idle, 1280, 720);
                 bool fading = p.NeedsFastFrames;
+                Rectangle area = p.AnimatedArea;
+                CurtainPainter.Layout fl = p.Current;
+                bool mapPart = p.FrameIntervalMs == CurtainPainter.MapFrameMs && !area.IsEmpty && new Rectangle(0, 0, 1280, 720).Contains(area) &&
+                               fl != null && area.Width < 1280 && area.Height < 720 && area.Width >= (int)fl.Map.Width && area.Height >= (int)fl.Map.Height;
                 p.FixedNowMs = turn + cycle + WeatherMap.HoldMs / 2;
                 p.Paint(g, idle, 1280, 720);
                 bool restsAgain = !p.NeedsFastFrames;
@@ -1012,6 +1187,8 @@ namespace ClaudeCurtain
                 p.Paint(g, CurtainPreview.Sample(po, "typing"), 1280, 720);
                 bool veilDone = !p.NeedsFastFrames;
                 Check("motion: the map's replay cross-fades at frame rate and the screen rests in the hold on the latest picture", rest && fading && restsAgain);
+                Check("motion: while only the replay fades, the window repaints about " + (1000 / CurtainPainter.MapFrameMs) + " times a second and only the map's part (" +
+                      area.Width + " x " + area.Height + ")", mapPart);
                 Check("motion: the map steps back while a PIN is typed, then the screen rests", veilMoves && veilDone);
             }
 
@@ -1108,7 +1285,7 @@ namespace ClaudeCurtain
                     Box = new GeoBox(45.1, -122.9, 45.5, -122.5), FrameBox = new GeoBox(44, -124, 46, -122), BaseW = 2, BaseH = 2,
                     Water = new byte[4], BaseId = "selftest-close-up", Radar = new[] { f },
                 };
-                using (Bitmap pic = (Bitmap)MapArt.Frame(close, close.Box, 200, 100, f, true).Clone())
+                using (Bitmap pic = MapArt.Frame(close, close.Box, 200, 100, f, true))
                 {
                     Check("close-up: it plays the big map's pictures, placed by the big map's box, softened where blown up",
                           pic.GetPixel(100, 50).A > 200 && pic.GetPixel(1, 1).A == 0 && pic.GetPixel(198, 98).A == 0);
@@ -1146,6 +1323,11 @@ namespace ClaudeCurtain
                     string tiny = CurtainPainter.FitCredit(g, full, font, 1, 5);
                     Check("map: a credit too long for its room drops the public-domain sources from the end, never OpenStreetMap's (" + narrow + " | " + tiny + ")",
                           CurtainPainter.FitCredit(g, full, font, 1, 9999) == full && narrow == "NOAA  ·  USGS  ·  © OPENSTREETMAP" && tiny == "© OPENSTREETMAP");
+                    string withFog = "NOAA  ·  USGS  ·  CENSUS  ·  SSEC REALEARTH, UW-MADISON  ·  © OPENSTREETMAP";
+                    string fogNarrow = CurtainPainter.FitCredit(g, withFog, font, 1, CurtainPainter.Measure(g, "NOAA  ·  SSEC REALEARTH, UW-MADISON  ·  © OPENSTREETMAP", font, 1) + 1);
+                    string fogTiny = CurtainPainter.FitCredit(g, withFog, font, 1, 5);
+                    Check("map: with the fog, SSEC RealEarth's credit stays too (" + fogNarrow + " | " + fogTiny + ")",
+                          fogNarrow == "NOAA  ·  SSEC REALEARTH, UW-MADISON  ·  © OPENSTREETMAP" && fogTiny == "SSEC REALEARTH, UW-MADISON  ·  © OPENSTREETMAP");
                 }
             }
 
