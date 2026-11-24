@@ -293,7 +293,7 @@ namespace ClaudeCurtain
         {
             Random r = new Random(7);
             int n = SysStats.HistoryLength;
-            float[] cpu = new float[n], net = new float[n], mem = new float[n];
+            float[] cpu = new float[n], net = new float[n], mem = new float[n], gpu = new float[n];
             for (int i = 0; i < n; i++)
             {
                 double c = 6 + 4 * r.NextDouble();
@@ -302,6 +302,8 @@ namespace ClaudeCurtain
                 double k = 18 * 1024 + 12 * 1024 * r.NextDouble();
                 k += 3.1 * 1048576 * Bump(i, 300, 26) + 0.9 * 1048576 * Bump(i, 520, 12) + 1.2 * 1048576 * Bump(i, 590, 9);
                 net[i] = (float)k;
+                // the GPU: the curtain's own map keeps it a little busy, more in the bursts that draw
+                gpu[i] = (float)Math.Min(100, 18 + 3 * r.NextDouble() + 30 * Bump(i, 300, 18) + 12 * Bump(i, 455, 8));
                 // memory: a slow level that rises with the bursts of work and eases back after them
                 mem[i] = (float)(41 + 3 * i / (double)n + 5 * Bump(i, 310, 40) + 3 * Bump(i, 465, 25) + 0.4 * (r.NextDouble() - 0.5));
             }
@@ -314,6 +316,8 @@ namespace ClaudeCurtain
             s.CpuHistory = cpu;
             s.NetHistory = net;
             s.MemHistory = mem;
+            s.GpuHistory = gpu;
+            s.Gpu = Math.Round(gpu[n - 1]); s.VramUsedGb = 1.3; s.VramTotalGb = 6;
             s.MemPercent = Math.Round(mem[n - 1]);
             return s;
         }

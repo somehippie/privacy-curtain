@@ -152,6 +152,7 @@ namespace ClaudeCurtain
             sysStats = new SysStats(o.LocalDir);
             try { sysStats.Sample(); } catch { }   // seed RAM / uptime / weather for the very first paint
             try { sysStats.StartMedia(); } catch { }
+            try { sysStats.StartGpu(); } catch { }
 
             Application.EnableVisualStyles();
             ui = new CurtainUi(gate, hooks, queue, AutoExitText(), sysStats);

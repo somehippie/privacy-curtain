@@ -16,6 +16,7 @@ namespace ClaudeCurtain
     /// a failing reading just shows "--" and the curtain is never affected.
     ///
     ///   CPU   from GetSystemTimes (idle vs. busy over the interval), not a performance counter
+    ///   GPU   busiest engine and dedicated memory in use, read by GpuMeter on a thread of its own
     ///   RAM   from GlobalMemoryStatusEx
     ///   Net   from the network interfaces' byte counters, as a rate over the interval
     ///   Up    system uptime; Disk free on the system drive
@@ -82,6 +83,10 @@ namespace ClaudeCurtain
         public void StartMedia() { media.Start(); }
         public MediaInfo Media { get { return media.Current; } }
 
+        // How busy the graphics card is (see GpuMeter): read on a thread of its own once StartGpu is called.
+        private readonly GpuMeter gpu = new GpuMeter();
+        public void StartGpu() { gpu.Start(); }
+
         public string StatsLine { get { return statsLine; } }
         public string SysLine { get { return sysLine; } }
 
@@ -99,6 +104,7 @@ namespace ClaudeCurtain
         private readonly float[] cpuRing = new float[HistoryLength];
         private readonly float[] netRing = new float[HistoryLength];
         private readonly float[] memRing = new float[HistoryLength];
+        private readonly float[] gpuRing = new float[HistoryLength];
         private int ringCount, ringNext, version;
         private double cpuNow = -1, memPct = -1, memUsed, memTotal, netDown = -1, netUp = -1, diskPct = -1, diskFree, diskTotal;
         private long upSecs = -1;
@@ -161,11 +167,14 @@ namespace ClaudeCurtain
             cpuRing[ringNext] = (float)cpuNow;
             netRing[ringNext] = (float)netDown;
             memRing[ringNext] = (float)memPct;
+            double gpuNow = gpu.Busy;
+            gpuRing[ringNext] = (float)gpuNow;
             ringNext = (ringNext + 1) % HistoryLength;
             if (ringCount < HistoryLength) ringCount++;
 
             SysSnapshot s = new SysSnapshot();
             s.Version = ++version;
+            s.Gpu = gpuNow; s.VramUsedGb = gpu.VramUsedGb; s.VramTotalGb = gpu.VramTotalGb;
             s.Cpu = cpuNow; s.MemPercent = memPct; s.MemUsedGb = memUsed; s.MemTotalGb = memTotal;
             s.NetDown = netDown; s.NetUp = netUp;
             s.DiskUsedPercent = diskPct; s.DiskFreeGb = diskFree; s.DiskTotalGb = diskTotal; s.DiskName = diskName;
@@ -173,6 +182,7 @@ namespace ClaudeCurtain
             s.CpuHistory = Unroll(cpuRing);
             s.NetHistory = Unroll(netRing);
             s.MemHistory = Unroll(memRing);
+            s.GpuHistory = Unroll(gpuRing);
             snapshot = s;
         }
 
@@ -402,6 +412,8 @@ namespace ClaudeCurtain
     {
         public int Version;
         public double Cpu = -1;                     // percent busy; -1 = not known yet
+        public double Gpu = -1;                     // percent busy (the busiest engine); -1 = not known
+        public double VramUsedGb = -1, VramTotalGb;  // dedicated graphics memory; -1 / 0 = not known
         public double MemPercent = -1, MemUsedGb, MemTotalGb;
         public double NetDown = -1, NetUp = -1;     // bytes per second
         public double DiskUsedPercent = -1, DiskFreeGb, DiskTotalGb;
@@ -410,6 +422,7 @@ namespace ClaudeCurtain
         public float[] CpuHistory = new float[0];   // oldest first, one a second; negative = no reading
         public float[] NetHistory = new float[0];   // download bytes per second, same spacing
         public float[] MemHistory = new float[0];   // percent of memory in use, same spacing
+        public float[] GpuHistory = new float[0];   // percent the GPU is busy, same spacing
     }
 
     /// <summary>One hour of the hourly forecast.</summary>

@@ -1623,7 +1623,7 @@ namespace ClaudeCurtain
             {
                 bool graphs = s.Sys != null;
                 float labelW = 0, valueW = 0, noteW = 0, graphW = graphs ? (float)Math.Round(unit * 1.3f) : 0;
-                foreach (string t in new[] { "CPU", "MEMORY", "NETWORK", "DISK", "UPTIME" }) labelW = Math.Max(labelW, Measure(m, t, fLabel.Font, track));
+                foreach (string t in new[] { "CPU", "GPU", "MEMORY", "NETWORK", "DISK", "UPTIME" }) labelW = Math.Max(labelW, Measure(m, t, fLabel.Font, track));
                 foreach (string t in new[] { "100%", "↓ 999.9 KB/s", "↓ 99.9 MB/s", "99d 23h", "--" }) valueW = Math.Max(valueW, Measure(m, t, fData.Font, 0));
                 foreach (string t in new[] { "99.9 / 999 GB", "↑ 999.9 KB/s", "↑ 99.9 MB/s", "9999 GB free" }) noteW = Math.Max(noteW, Measure(m, t, fSmall.Font, 0));
                 if (!graphs)
@@ -1644,7 +1644,10 @@ namespace ClaudeCurtain
                 y += st(6) * 0.8f;
                 ops.Add(new Op { Kind = 1, X = ox, Y = (float)Math.Round(y), W = w, H = 1, Color = RuleColor });
                 y += st(5) + fData.CapHeight;
-                float pitch = fData.Font.Size * 1.6f;   // 1.8 until 2026-11-17: a tighter table lets the map's header rise
+                // 1.8 until 2026-11-17: a tighter table lets the map's header rise. Since 2026-11-24 (the GPU's row)
+                // the rows share the height five rows took at 1.6, so a sixth row moves neither the forecast's
+                // header nor the map's beside it, and the map and the close-up keep their size.
+                float pitch = fData.Font.Size * Math.Min(1.6f, 6.4f / Math.Max(1, rows.Count - 1));
                 float vx = ox + labelW + gx, gx0 = vx + valueW + gx, nx = gx0 + graphW + gx;
                 foreach (object[] r in rows)
                 {
@@ -2192,6 +2195,12 @@ namespace ClaudeCurtain
             {
                 bool any = x.Version > 0;
                 rows.Add(new object[] { "CPU", any && x.Cpu >= 0 ? Math.Round(x.Cpu).ToString(CultureInfo.InvariantCulture) + "%" : "--", x.CpuHistory, 100.0, "" });
+                // the graphics card (2026-11-24, at the user's request): its busiest engine, as Task Manager shows
+                // it, and its own memory in use
+                rows.Add(new object[] { "GPU", any && x.Gpu >= 0 ? Math.Round(x.Gpu).ToString(CultureInfo.InvariantCulture) + "%" : "--", x.GpuHistory, 100.0,
+                                        !any || x.VramUsedGb < 0 ? "" : x.VramTotalGb > 0
+                                            ? x.VramUsedGb.ToString("0.0", CultureInfo.InvariantCulture) + " / " + x.VramTotalGb.ToString("0", CultureInfo.InvariantCulture) + " GB"
+                                            : x.VramUsedGb.ToString("0.0", CultureInfo.InvariantCulture) + " GB" });
                 rows.Add(new object[] { "MEMORY", any && x.MemPercent >= 0 ? Math.Round(x.MemPercent).ToString(CultureInfo.InvariantCulture) + "%" : "--",
                                         x.MemHistory, 100.0,   // a sparkline like CPU's since 2026-11-21 (a bar before)
                                         any && x.MemPercent >= 0 ? x.MemUsedGb.ToString("0.0", CultureInfo.InvariantCulture) + " / " + x.MemTotalGb.ToString("0", CultureInfo.InvariantCulture) + " GB" : "" });

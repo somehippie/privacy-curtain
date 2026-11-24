@@ -229,9 +229,10 @@ about what it is doing. Everything on it comes from one proportional system buil
   optical centre of the digits, AM/PM hangs small at cap height, and small capitals are letter-spaced.
   Forecast text is set in sentence case. The message is set small (its title C/φ⁵, its two lines C/φ⁶,
   the accent rule nearer the title than the map), so the map gets the height.
-- **Data.** CPU and download rate are ten-minute sparklines with the newest reading at the right and a dot
-  on it, and so is memory; disk is a proportion bar. CPU and memory are drawn on a fixed 0–100% scale, so
-  a quiet machine looks quiet. Every value is also printed as text beside its graphic, so nothing depends on reading a
+- **Data.** CPU, GPU and download rate are ten-minute sparklines with the newest reading at the right and a
+  dot on it, and so is memory; disk is a proportion bar. CPU, GPU and memory are drawn on a fixed 0–100%
+  scale, so a quiet machine looks quiet. The six rows share the height five would take at the table's
+  usual spacing, so the GPU's row moves nothing below the table. Every value is also printed as text beside its graphic, so nothing depends on reading a
   chart. The forecast opens with the conditions now as a row of symbols, each with its value and no words:
   the humidity by a drop filled to its level, the dew point by a thermometer and a drop, the wind's speed by
   an arrow on a ring pointing the way it blows, as on the map (the ring alone when calm, amber from 20 mph),
@@ -320,9 +321,12 @@ you are comfortable with people knowing your town.
 
 The data column:
 
-- **Machine stats**, live from inside the curtain (sampled once a second, no performance counters, no
-  admin): CPU busy %, memory used, download and upload rates, used share of the system drive, and system
-  uptime, with ten minutes of history kept in memory for the sparklines.
+- **Machine stats**, live from inside the curtain (sampled once a second, no admin): CPU busy %, GPU busy %
+  and the graphics card's own memory in use, memory used, download and upload rates, used share of the
+  system drive, and system uptime, with ten minutes of history kept in memory for the sparklines. Only the
+  GPU uses performance counters: Windows' GPU Engine counters, read as Task Manager does (each engine's
+  processes added up; the busiest engine is the GPU's figure), on a thread of their own so a slow read never
+  holds up the PIN keys. The card's memory size comes from its driver's registry entry.
 - **The local forecast.** Humidity, dew point, wind, the next sunrise and sunset, the next six hours, and
   three days with each day's peak wind and gusts.
   Set your location in `config.json` (copy `config.example.json`):
