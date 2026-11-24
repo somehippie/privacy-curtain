@@ -1187,22 +1187,23 @@ namespace ClaudeCurtain
 
         // The past hour plays on a loop: a picture every 0.7 s, each fading gradually into the next over the whole
         // step (until 2026-11-23 each was held and then cross-faded in 250 ms; the user: "a gradual fade instead of
-        // frame-by-frame animation could help"), the latest fading back to the oldest a little quicker as each turn
-        // begins, and the latest held two steps before the hour plays again.
+        // frame-by-frame animation could help"), and the latest fading back to the oldest over a step of its own as
+        // each turn begins. No pause on the latest (until 2026-11-24 it was held 1.4 s and then faded back in
+        // 0.45 s; the user: "the final image should have same interval as the frames"): every picture, the latest
+        // too, gets one step.
         public const int StepMs = 700;
-        public const int FadeMs = 450;      // the turn's first fade, latest to oldest
-        public const int HoldMs = 1400;
 
-        /// <summary>One turn of the loop for count pictures: the hold on the latest, then the hour played through.</summary>
+        /// <summary>One turn of the loop for count pictures: a step for each, the latest's being the fade back.</summary>
         internal static long CycleFor(int count)
         {
-            return count < 2 ? 0 : HoldMs + FadeMs + (long)(count - 1) * StepMs;
+            return count < 2 ? 0 : (long)count * StepMs;
         }
 
         /// <summary>
-        /// Which pictures show at a moment: picture i fading into j by fade (0..1). Each turn of the loop holds the
-        /// latest picture briefly, then plays the past hour from the oldest and finishes on the latest again (until
-        /// 2026-11-17 it rested there for most of a 30 s cycle). progress runs 0..1 through the hour.
+        /// Which pictures show at a moment: picture i fading into j by fade (0..1). Each turn of the loop begins on
+        /// the latest picture, fades it back to the oldest, then plays the past hour and finishes on the latest
+        /// again, every step the same length (until 2026-11-17 it rested on the latest for most of a 30 s cycle,
+        /// until 2026-11-24 for 1.4 s). progress runs 0..1 through the hour, and is 0 during the fade back.
         /// </summary>
         internal static void LoopAt(int count, long ms, out int i, out int j, out float fade, out float progress, out bool playing)
         {
@@ -1211,23 +1212,14 @@ namespace ClaudeCurtain
             if (count < 2) return;
             long cycle = CycleFor(count);
             long p = ((ms % cycle) + cycle) % cycle;
-            long start = HoldMs;
-            if (p < start) return;
             playing = true;
-            long q = p - start;
-            if (q < FadeMs)
-            {
-                i = count - 1; j = 0; fade = (float)Smooth01(q / (double)FadeMs); progress = 0;
-                return;
-            }
-            q -= FadeMs;
-            int k = (int)(q / StepMs);
-            if (k >= count - 1) { playing = false; return; }
-            double s = (q - (long)k * StepMs) / (double)StepMs;
-            i = k; j = k + 1;
+            int k = (int)(p / StepMs);
+            double s = (p - (long)k * StepMs) / (double)StepMs;
             // eased, so the motion never stops yet each picture is whole for a moment as the fade passes it
             fade = (float)Smooth01(s);
-            progress = (float)((k + s) / (count - 1));
+            if (k == 0) { i = count - 1; j = 0; progress = 0; return; }   // the turn begins: the latest back to the oldest
+            i = k - 1; j = k;
+            progress = (float)((k - 1 + s) / (count - 1));
         }
 
         // ------------------------------------------------------------------ the sample (previews and tests)

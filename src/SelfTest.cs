@@ -19,6 +19,7 @@ namespace ClaudeCurtain
             {
                 TestPinStore(o);
                 TestPinGate();
+                TestRest(o);
                 TestKeyQueue();
                 TestAlerter(o);
                 TestSysStats(o);
@@ -232,6 +233,50 @@ namespace ClaudeCurtain
                   early.Unlocked && early.Gate.UnlockKeys == 5 && twice.Unlocked && twice.Gate.UnlockKeys == 6 &&
                   midEntry.Unlocked && midEntry.Gate.UnlockKeys == 5 && beforeWrong.Unlocked && beforeWrong.Gate.UnlockKeys == 5 &&
                   wokeUncounted.Unlocked && wokeUncounted.Gate.UnlockKeys == 0);
+        }
+
+        /// <summary>Rest (2026-11-23): when the curtain rests and wakes, its options, and the map holding still.</summary>
+        private static void TestRest(Options o)
+        {
+            DateTime t0 = new DateTime(2026, 11, 23, 22, 0, 0, DateTimeKind.Utc);
+            RestClock r = new RestClock(t0, 45, 20);
+            bool before = !r.Resting(t0.AddMinutes(44.9)), rests = r.Resting(t0.AddMinutes(45));
+            r.Key(t0.AddMinutes(50));
+            bool woken = !r.Resting(t0.AddMinutes(50)) && !r.Resting(t0.AddMinutes(69.9)), again = r.Resting(t0.AddMinutes(70));
+            r.Key(t0.AddMinutes(75));
+            bool twice = !r.Resting(t0.AddMinutes(94)) && r.Resting(t0.AddMinutes(95.1));
+            bool never = !new RestClock(t0, 0, 20).Resting(t0.AddHours(30));
+            Check("rest: no key for 45 min rests the curtain; a key wakes it for 20 min, then it rests again; 0 means never",
+                  before && rests && woken && again && twice && never);
+
+            Options d = Options.Parse(new[] { "--seconds", "600" });
+            Options c = Options.Parse(new[] { "--seconds", "600", "--rest-minutes", "30", "--wake-minutes", "10" });
+            Options off = Options.Parse(new[] { "--seconds", "600", "--rest-minutes", "0" });
+            Check("rest: 45 and 20 minutes unless --rest-minutes and --wake-minutes say otherwise (--rest-minutes 0: never)",
+                  d.RestMinutes == 45 && d.WakeMinutes == 20 && c.RestMinutes == 30 && c.WakeMinutes == 10 && off.RestMinutes == 0);
+
+            // Resting, the map holds its latest picture: nothing fades, so the screen never needs fast frames.
+            using (Bitmap canvas = new Bitmap(1280, 720))
+            using (Graphics g = Graphics.FromImage(canvas))
+            using (CurtainPainter p = new CurtainPainter())
+            {
+                DisplayState s = CurtainPreview.Sample(new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") }, "radar");
+                long cycle = WeatherMap.CycleFor(8), turn = 3 * cycle;
+                long fadeAt = turn + WeatherMap.StepMs * 3 / 2;   // mid-fade when awake
+                for (int k = 0; k <= 12; k++) { p.FixedNowMs = turn + k * 100; p.Paint(g, s, 1280, 720); }
+                p.FixedNowMs = fadeAt;
+                p.Paint(g, s, 1280, 720);
+                bool awakeFades = p.NeedsFastFrames;
+                s.Resting = true;
+                p.FixedNowMs = fadeAt + 40;
+                p.Paint(g, s, 1280, 720);
+                bool restingStill = !p.NeedsFastFrames;
+                string restingKey = s.Key();
+                s.Resting = false;
+                bool keyMoves = restingKey != s.Key();
+                Check("rest: resting, the map holds its latest picture (no fades, no fast frames) and a repaint is due when it changes",
+                      awakeFades && restingStill && keyMoves);
+            }
         }
 
         /// <summary>The fog (2026-11-23), the smoothing of the weather pictures, and the replay's blend.</summary>
@@ -829,12 +874,15 @@ namespace ClaudeCurtain
             using (CurtainPainter p = new CurtainPainter())
             {
                 Options po = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") };
+                // resting, so the map holds its latest picture (awake, its replay fades the whole time)
+                DisplayState still = CurtainPreview.Sample(po, "idle");
+                still.Resting = true;
                 p.FixedNowMs = 0;
-                p.Paint(g, CurtainPreview.Sample(po, "idle"), 1280, 720);
+                p.Paint(g, still, 1280, 720);
                 bool fadeFast = p.NeedsFastFrames;
-                p.FixedNowMs = WeatherMap.HoldMs - 100;   // after the fade-in, while the map's loop holds its latest picture
-                p.Paint(g, CurtainPreview.Sample(po, "idle"), 1280, 720);
-                bool settled = !p.NeedsFastFrames && CurtainPainter.FadeInMs < WeatherMap.HoldMs - 100;
+                p.FixedNowMs = CurtainPainter.FadeInMs + 200;   // after the fade-in
+                p.Paint(g, still, 1280, 720);
+                bool settled = !p.NeedsFastFrames;
                 p.FixedNowMs = 2000;
                 p.Paint(g, CurtainPreview.Sample(po, "typing"), 1280, 720);
                 bool dotsFast = p.NeedsFastFrames;
@@ -1111,34 +1159,37 @@ namespace ClaudeCurtain
                       edge.West >= box.West - 1e-9 && edge.South >= box.South - 1e-9 && edge.East <= box.East && edge.North <= box.North);
             }
 
-            // The replay: a loop that holds the latest picture briefly, plays the hour in order, ends on the latest.
+            // The replay: a loop that begins on the latest picture, fades it back to the oldest, plays the hour in
+            // order and ends on the latest, every step the same (no pause on the latest since 2026-11-24).
             {
                 int i, j;
                 float t, progress;
                 bool playing;
-                long cycle = WeatherMap.CycleFor(8), start = WeatherMap.HoldMs;
-                WeatherMap.LoopAt(8, WeatherMap.HoldMs / 2, out i, out j, out t, out progress, out playing);
-                bool rests = i == 7 && j == 7 && !playing;
-                WeatherMap.LoopAt(8, start + WeatherMap.FadeMs / 2, out i, out j, out t, out progress, out playing);
+                long cycle = WeatherMap.CycleFor(8), start = WeatherMap.StepMs;
+                WeatherMap.LoopAt(8, 0, out i, out j, out t, out progress, out playing);
+                bool begins = i == 7 && j == 0 && t < 0.01f;
+                WeatherMap.LoopAt(8, WeatherMap.StepMs / 2, out i, out j, out t, out progress, out playing);
                 bool wraps = i == 7 && j == 0 && t > 0.3f && t < 0.7f && playing;
                 bool forward = true;
                 int lastI = 0;
-                for (long ms = start + WeatherMap.FadeMs; ms < cycle; ms += 50)
+                for (long ms = start; ms < cycle; ms += 50)
                 {
                     WeatherMap.LoopAt(8, ms, out i, out j, out t, out progress, out playing);
                     if (i < lastI || j != i + 1 || !playing) forward = false;
                     lastI = i;
                 }
+                WeatherMap.LoopAt(8, cycle - 1, out i, out j, out t, out progress, out playing);
+                bool ends = j == 7 && t > 0.99f;
                 WeatherMap.LoopAt(8, cycle + 10, out i, out j, out t, out progress, out playing);
-                bool ends = i == 7 && !playing;
+                bool again = i == 7 && j == 0 && playing;
                 WeatherMap.LoopAt(1, start + 100, out i, out j, out t, out progress, out playing);
-                Check("map: the replay loops: it plays the past hour in order, ends on the latest, holds it two steps and plays again",
-                      rests && wraps && forward && ends && i == 0 && !playing && WeatherMap.HoldMs <= 2 * WeatherMap.StepMs && cycle < 8000);
+                Check("map: the replay loops with no pause: it plays the past hour in order, ends on the latest, fades back to the oldest over the same step and plays again",
+                      begins && wraps && forward && ends && again && i == 0 && !playing && cycle == 8 * WeatherMap.StepMs);
                 // the fade runs through each whole step (2026-11-23): never a jump, and no picture held still for long
                 int still = 0, samples = 0;
                 float lastPos = -1;
                 bool gradual = true;
-                for (long ms = start + WeatherMap.FadeMs; ms < cycle - 10; ms += 10)
+                for (long ms = start; ms < cycle - 10; ms += 10)
                 {
                     WeatherMap.LoopAt(8, ms, out i, out j, out t, out progress, out playing);
                     samples++;
@@ -1168,25 +1219,25 @@ namespace ClaudeCurtain
                 Options po = new Options { LocalDir = Path.Combine(o.LocalDir, "no-such-dir") };
                 DisplayState idle = CurtainPreview.Sample(po, "idle");
                 long cycle = WeatherMap.CycleFor(8), turn = 3 * cycle;   // a few turns in, so the picture count settles
-                for (int k = 0; k <= 12; k++) { p.FixedNowMs = turn + k * 100; p.Paint(g, idle, 1280, 720); }   // in the hold; also warms every picture
-                bool rest = !p.NeedsFastFrames;
-                p.FixedNowMs = turn + WeatherMap.HoldMs + WeatherMap.StepMs + WeatherMap.FadeMs + (WeatherMap.StepMs - WeatherMap.FadeMs) + WeatherMap.FadeMs / 2;
+                for (int k = 0; k <= 12; k++) { p.FixedNowMs = turn + k * 100; p.Paint(g, idle, 1280, 720); }   // warms every picture
+                p.FixedNowMs = turn + 2 * WeatherMap.StepMs + WeatherMap.StepMs / 2;   // mid-fade
                 p.Paint(g, idle, 1280, 720);
                 bool fading = p.NeedsFastFrames;
                 Rectangle area = p.AnimatedArea;
                 CurtainPainter.Layout fl = p.Current;
                 bool mapPart = p.FrameIntervalMs == CurtainPainter.MapFrameMs && !area.IsEmpty && new Rectangle(0, 0, 1280, 720).Contains(area) &&
                                fl != null && area.Width < 1280 && area.Height < 720 && area.Width >= (int)fl.Map.Width && area.Height >= (int)fl.Map.Height;
-                p.FixedNowMs = turn + cycle + WeatherMap.HoldMs / 2;
+                idle.Resting = true;
+                p.FixedNowMs = turn + cycle + WeatherMap.StepMs / 2;
                 p.Paint(g, idle, 1280, 720);
                 bool restsAgain = !p.NeedsFastFrames;
-                p.FixedNowMs = turn + cycle + WeatherMap.HoldMs / 2 + 100;
+                p.FixedNowMs = turn + cycle + WeatherMap.StepMs / 2 + 100;
                 p.Paint(g, CurtainPreview.Sample(po, "typing"), 1280, 720);
                 bool veilMoves = p.NeedsFastFrames;
-                p.FixedNowMs = turn + cycle + WeatherMap.HoldMs / 2 + 100 + CurtainPainter.VeilMs + 400;   // the loop plays on, unseen
+                p.FixedNowMs = turn + cycle + WeatherMap.StepMs / 2 + 100 + CurtainPainter.VeilMs + 400;   // the loop plays on, unseen
                 p.Paint(g, CurtainPreview.Sample(po, "typing"), 1280, 720);
                 bool veilDone = !p.NeedsFastFrames;
-                Check("motion: the map's replay cross-fades at frame rate and the screen rests in the hold on the latest picture", rest && fading && restsAgain);
+                Check("motion: the map's replay cross-fades at frame rate and the screen rests while the curtain rests", fading && restsAgain);
                 Check("motion: while only the replay fades, the window repaints about " + (1000 / CurtainPainter.MapFrameMs) + " times a second and only the map's part (" +
                       area.Width + " x " + area.Height + ")", mapPart);
                 Check("motion: the map steps back while a PIN is typed, then the screen rests", veilMoves && veilDone);

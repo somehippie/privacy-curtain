@@ -21,6 +21,8 @@ namespace ClaudeCurtain
         public const int WM_QUIT = 0x0012;
         public const int WM_ENDSESSION = 0x0016;
         public const int WM_DISPLAYCHANGE = 0x007E;
+        public const int WM_SYSCOMMAND = 0x0112;
+        public const int SC_MONITORPOWER = 0xF170;   // with lParam 2: switch the monitors off (any input turns them on)
         public const int WM_MOUSEMOVE = 0x0200;
         public const int WM_LBUTTONDOWN = 0x0201;
         public const int WM_LBUTTONUP = 0x0202;
@@ -130,6 +132,10 @@ namespace ClaudeCurtain
         [DllImport("user32.dll", SetLastError = true)]
         [return: MarshalAs(UnmanagedType.Bool)]
         public static extern bool PostThreadMessage(uint idThread, uint msg, IntPtr wParam, IntPtr lParam);
+
+        [DllImport("user32.dll", SetLastError = true)]
+        [return: MarshalAs(UnmanagedType.Bool)]
+        public static extern bool PostMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
         [DllImport("kernel32.dll")]
         public static extern uint GetCurrentThreadId();

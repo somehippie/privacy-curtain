@@ -43,6 +43,8 @@ namespace ClaudeCurtain
         }
 
         private static Options options;
+        /// <summary>In local\ while the curtain rests (RestClock): the weather script then fetches less often.</summary>
+        public const string RestFlagName = "resting";
         private static Mutex instanceMutex;
         private static EventWaitHandle stopEvent;
         private static EventWaitHandle beatEvent;
@@ -154,6 +156,9 @@ namespace ClaudeCurtain
             Application.EnableVisualStyles();
             ui = new CurtainUi(gate, hooks, queue, AutoExitText(), sysStats);
             ui.TestElevatedTitle = o.TestElevatedTitle;
+            if (o.RestMinutes > 0) ui.Rest = new RestClock(DateTime.UtcNow, o.RestMinutes, o.WakeMinutes);
+            ui.RestFlagFile = Path.Combine(o.LocalDir, RestFlagName);
+            try { File.Delete(ui.RestFlagFile); } catch { }   // one left by a curtain that was killed
             string error = ui.Create();
             if (error != null)
             {
@@ -260,6 +265,7 @@ namespace ClaudeCurtain
             catch { }
             try { WriteLastExit(reason, code); } catch { }
             try { if (options != null) File.Delete(options.StateFile); } catch { }
+            try { if (options != null) File.Delete(Path.Combine(options.LocalDir, RestFlagName)); } catch { }
 
             Native.TerminateProcess(Native.GetCurrentProcess(), (uint)code);
             Thread.Sleep(Timeout.Infinite);

@@ -27,6 +27,7 @@ namespace ClaudeCurtain
         public bool Bright;
         public bool AdminNotice;
         public int Drift;
+        public bool Resting;             // no key for a while (RestClock): the map holds still, the accent rule rests
 
         // Glanceable info (see SysStats). Empty strings / arrays mean "nothing to show".
         public string Stats = "";
@@ -59,7 +60,45 @@ namespace ClaudeCurtain
 
         public string Key()
         {
-            return ContentKey() + "|" + Drift;
+            return ContentKey() + "|" + Drift + (Resting ? "|rest" : "");
+        }
+    }
+
+    /// <summary>
+    /// When the curtain rests (2026-11-23; the user: "after 45min or so a lower PC/GPU mode helps save energy. If I
+    /// touch a key it can spin back up in 20min intervals", then: the monitor off too, and the keyboard only, not the
+    /// mouse). It rests once no key has been pressed for RestMinutes since it went up, or for WakeMinutes since the
+    /// last key. Only physical key presses count: the mouse and Claude's own input never wake it. Resting, the map
+    /// holds its latest picture, the screen changes every few seconds, the weather script fetches less often and
+    /// the monitor is switched off (and off again a minute after anything else turns it on).
+    /// </summary>
+    internal sealed class RestClock
+    {
+        public const double DefaultRestMinutes = 45, DefaultWakeMinutes = 20;
+        public const int MonitorAgainSeconds = 60;
+        private readonly double restMinutes, wakeMinutes;
+        private DateTime lastKeyUtc;
+        private bool anyKey;
+
+        public RestClock(DateTime startUtc, double restMinutes, double wakeMinutes)
+        {
+            lastKeyUtc = startUtc;
+            this.restMinutes = restMinutes;
+            this.wakeMinutes = wakeMinutes;
+        }
+
+        public double WakeMinutes { get { return wakeMinutes; } }
+
+        public void Key(DateTime utc)
+        {
+            lastKeyUtc = utc;
+            anyKey = true;
+        }
+
+        public bool Resting(DateTime utc)
+        {
+            if (restMinutes <= 0) return false;
+            return (utc - lastKeyUtc).TotalMinutes >= (anyKey ? wakeMinutes : restMinutes);
         }
     }
 
@@ -213,6 +252,19 @@ namespace ClaudeCurtain
 
         /// <summary>True while this window's painter is in the middle of an animation.</summary>
         public bool Animating { get { return painter.NeedsFastFrames; } }
+
+        /// <summary>
+        /// Switches the monitors off while the curtain rests. Windows' default handling of the system command does
+        /// it; the keep-awake request stays held, so sleep and the screen saver stay off. Any input turns them on.
+        /// </summary>
+        public void MonitorOff()
+        {
+            try
+            {
+                if (IsHandleCreated) Native.PostMessage(Handle, Native.WM_SYSCOMMAND, (IntPtr)Native.SC_MONITORPOWER, (IntPtr)2);
+            }
+            catch { }
+        }
 
         /// <summary>While animating: the least time between repaints, and the part that changes (empty: all).</summary>
         public int FrameIntervalMs { get { return painter.FrameIntervalMs; } }
@@ -369,6 +421,14 @@ namespace ClaudeCurtain
         public string TestElevatedTitle { get; set; }
         private volatile bool freezeForTest;
 
+        /// <summary>When to rest (null: never); and a file that exists while resting, for the weather script.</summary>
+        public RestClock Rest { get; set; }
+        public string RestFlagFile { get; set; }
+        private bool resting, monitorOff;
+        private long lastKeys = -1, lastInput = -1;
+        private DateTime lastInputUtc = DateTime.UtcNow;
+        private const int RestRepaintTicks = 25;   // resting, the screen changes every 5 s (TickMs 200)
+
         public CurtainUi(PinGate gate, InputHooks hooks, KeyQueue queue, string autoExitText, SysStats stats)
         {
             this.gate = gate;
@@ -514,8 +574,38 @@ namespace ClaudeCurtain
 
         private void UpdateDisplay()
         {
+            // Rest (RestClock): a physical key wakes it at once; resting, the monitor goes off once a minute has
+            // passed without any input at all (the mouse or Claude's own input turn it on without waking the
+            // curtain), and the screen changes only every few seconds.
+            if (Rest != null && hooks != null)
+            {
+                DateTime utc = DateTime.UtcNow;
+                long keys = hooks.KeyPresses;
+                if (keys != lastKeys)
+                {
+                    if (lastKeys >= 0) Rest.Key(utc);
+                    lastKeys = keys;
+                }
+                long input = keys + hooks.ButtonPresses + hooks.Moves + hooks.InjectedKeys + hooks.InjectedMouse;
+                if (input != lastInput)
+                {
+                    lastInput = input;
+                    lastInputUtc = utc;
+                    monitorOff = false;
+                }
+                bool r = Rest.Resting(utc);
+                if (r != resting) SetResting(r);
+                if (resting && !monitorOff && (utc - lastInputUtc).TotalSeconds >= RestClock.MonitorAgainSeconds && forms.Count > 0)
+                {
+                    monitorOff = true;
+                    forms[0].MonitorOff();
+                }
+                if (resting && tick % RestRepaintTicks != 0) return;
+            }
+
             DateTime now = DateTime.Now;
             DisplayState s = new DisplayState();
+            s.Resting = resting;
             s.Clock = now.ToString("t");
             s.Date = now.ToString("dddd, MMMM d");
             s.Zone = ZoneText(now);
@@ -556,6 +646,23 @@ namespace ClaudeCurtain
             lastKey = key;
             current = s;
             foreach (CurtainForm f in forms) f.Invalidate();
+        }
+
+        private void SetResting(bool r)
+        {
+            resting = r;
+            monitorOff = false;
+            Log.Write(r ? "resting: no key for a while, so the map holds still, the screen changes every few seconds and the monitor goes off"
+                        : "awake: a key was pressed; fully on for " + Rest.WakeMinutes.ToString("0.#", CultureInfo.InvariantCulture) + " min");
+            try
+            {
+                if (!string.IsNullOrEmpty(RestFlagFile))
+                {
+                    if (r) System.IO.File.WriteAllText(RestFlagFile, DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture));
+                    else System.IO.File.Delete(RestFlagFile);
+                }
+            }
+            catch { }
         }
 
         /// <summary>Makes the set of windows match the set of monitors (hot-plug, resolution change, wake).</summary>

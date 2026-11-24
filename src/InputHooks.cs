@@ -52,6 +52,8 @@ namespace ClaudeCurtain
         public long KeyPresses { get { return Interlocked.Read(ref keyPresses); } }
         public long ButtonPresses { get { return Interlocked.Read(ref buttonPresses); } }
         public long Moves { get { return Interlocked.Read(ref blockedMoves); } }
+        public long InjectedKeys { get { return Interlocked.Read(ref passedKeys); } }    // Claude's own, let through
+        public long InjectedMouse { get { return Interlocked.Read(ref passedMouse); } }
 
         public InputHooks(KeyQueue queue, bool pinFromInjected)
         {

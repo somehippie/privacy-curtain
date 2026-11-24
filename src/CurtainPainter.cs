@@ -226,7 +226,8 @@ namespace ClaudeCurtain
             DrawMap(g, l, s, ox, oy, now, fadeIn);
             DrawMedia(g, l, s, ox, oy, fadeIn);
 
-            double breath = 0.62 + 0.38 * (0.5 - 0.5 * Math.Cos(2 * Math.PI * (now / 1000.0) / BreathSeconds));
+            // the rule breathes while the PC is at work, and holds still, at its quietest, while the curtain rests
+            double breath = s.Resting ? 0.62 : 0.62 + 0.38 * (0.5 - 0.5 * Math.Cos(2 * Math.PI * (now / 1000.0) / BreathSeconds));
             using (SolidBrush b = new SolidBrush(Fade(Accent, (float)breath * fadeIn)))
                 g.FillRectangle(b, ox + l.Rule.X, oy + l.Rule.Y, l.Rule.Width, l.Rule.Height);
 
@@ -1161,7 +1162,11 @@ namespace ClaudeCurtain
             int i = 0, j = 0;
             float t = 0, progress = 1;
             bool playing = false;
-            if (fr.Length > 0) WeatherMap.LoopAt(fr.Length, now, out i, out j, out t, out progress, out playing);
+            if (fr.Length > 0)
+            {
+                if (s.Resting) i = j = fr.Length - 1;   // resting (RestClock): the latest picture, still
+                else WeatherMap.LoopAt(fr.Length, now, out i, out j, out t, out progress, out playing);
+            }
             if (fr.Length > 0 || fog.Length > 0)
             {
                 // The radar or the clouds, picture i fading into j, over the fog of the same moments; blended into
@@ -1218,7 +1223,9 @@ namespace ClaudeCurtain
                     DrawDetailOverlay(og, l, dw, dh);
                 }), dx, dy, show);
             }
-            // at most one picture a frame, so a replay never waits: the map's, its fog's, then the close-up's
+            // at most one picture a frame, so a replay never waits: the map's, its fog's, then the close-up's (none
+            // while resting: only the latest shows, and the rest are rendered once it wakes)
+            if (s.Resting) return;
             bool warmed = fr.Length > 0 && MapArt.WarmOne(map, l.MapCrop, mw, mh, fr);
             if (!warmed && fog.Length > 0) warmed = MapArt.WarmOne(map, l.MapCrop, mw, mh, fog);
             if (!warmed && l.Detail.Width > 0 && map.Detail != null)

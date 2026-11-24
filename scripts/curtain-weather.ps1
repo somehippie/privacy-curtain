@@ -976,17 +976,24 @@ if (-not $Watch) {
 }
 
 # Watch: the forecast now and every RefreshMinutes, the map now and every MapMinutes, while the curtain is up;
-# leave when it closes.
+# leave when it closes. While the curtain rests (no key for a while: it writes local\resting) the map holds
+# still on screen, so its pictures are fetched every 15 minutes instead, and fresh ones as soon as it wakes.
 $nextForecast = Get-Date
 $nextMap = Get-Date
+$wasResting = $false
 while ($true) {
+    $resting = Test-Path (Join-Path $LocalDir 'resting')
+    if ($wasResting -and -not $resting) { $nextMap = Get-Date }
+    $wasResting = $resting
     if ((Get-Date) -ge $nextForecast) {
         [void](Update-Forecast)
         $nextForecast = (Get-Date).AddMinutes([Math]::Max(5, $RefreshMinutes))
     }
     if (-not $NoMap -and (Get-Date) -ge $nextMap) {
         try { Update-Map } catch { Write-Host "Map skipped: $($_.Exception.Message)" }
-        $nextMap = (Get-Date).AddMinutes([Math]::Max(2, $MapMinutes))
+        $every = [Math]::Max(2, $MapMinutes)
+        if ($resting) { $every = [Math]::Max($every, 15) }
+        $nextMap = (Get-Date).AddMinutes($every)
     }
     if (-not (Test-CurtainAlive)) { exit 0 }
     Start-Sleep -Seconds 15

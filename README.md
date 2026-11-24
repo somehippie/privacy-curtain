@@ -115,6 +115,16 @@ puts sleep, hibernate, display-off and the screen saver on hold, because any of 
 lock screen where the automated session can't work. It is a request held by the process, not a settings
 change: it ends the moment the curtain closes or its process dies, and your normal settings apply again.
 
+**Rest.** With no key pressed for 45 minutes since it went up (`--rest-minutes`, 0 = never), or for 20 since
+the last key (`--wake-minutes`), the curtain rests to save energy: the map holds its latest picture instead
+of replaying the hour, the accent rule stops breathing, the screen changes every 5 seconds instead of five
+times a second, the weather script fetches the map every 15 minutes instead of 5 (and fresh pictures the
+moment it wakes), and the monitor is switched off. A physical key press wakes it for 20 minutes; the mouse
+and the automated session's own input never do, though they turn the monitor back on (Windows does that for
+any input) until a minute passes with no input. The curtain switches the monitor off itself while still
+holding its keep-awake request, so sleep and the screen saver stay off and cannot lead to the lock screen.
+The key that wakes it is still blocked and counted, so it raises the input alert like any other.
+
 It does **not** override two things that can still lock the machine behind the curtain. Check these
 yourself before relying on it:
 
