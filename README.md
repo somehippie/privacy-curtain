@@ -277,7 +277,7 @@ about what it is doing. Everything on it comes from one proportional system buil
   runs along its header's rule. The two pictures of a fade, and the fog under them, are blended pixel by
   pixel into one picture and drawn once (about 4 ms), so what they share never thins mid-fade. The screen
   repaints at about 60 frames a second only while one of the short animations plays, just the map's part
-  about 29 times a second while only the loop moves, and five times a second otherwise.
+  about 25 times a second while only the loop moves, and five times a second otherwise.
 - **Drift.** Against burn-in, the composition wanders within 5% of its resting point: one sweep across
   every 5 minutes and one sweep down every 5 × φ ≈ 8.1 minutes. Because φ is irrational the path never
   repeats, so over the hours it covers its area evenly instead of retracing one figure:

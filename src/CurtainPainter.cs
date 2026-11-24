@@ -106,7 +106,7 @@ namespace ClaudeCurtain
         /// 2026-11-23 the replay fades through every step, so it would otherwise keep the whole screen at 60.
         /// </summary>
         public int FrameIntervalMs { get { return mapOnly ? MapFrameMs : 0; } }
-        public const int MapFrameMs = 34;
+        public const int MapFrameMs = 40;
 
         /// <summary>While only the map animates: the part of the window that changes. Empty = all of it.</summary>
         public Rectangle AnimatedArea { get { return mapOnly ? mapArea : Rectangle.Empty; } }
@@ -196,7 +196,15 @@ namespace ClaudeCurtain
         {
             Point at = Place(l.Block.Width, l.Block.Height, w, h, secs);
             if (alpha <= 0.004f) return at;
-            if (alpha >= 0.996f) { g.DrawImageUnscaled(l.Block, at); return at; }
+            if (alpha >= 0.996f)
+            {
+                // opaque, so copied rather than blended (faster still where only the map repaints)
+                CompositingMode mode = g.CompositingMode;
+                g.CompositingMode = CompositingMode.SourceCopy;
+                g.DrawImageUnscaled(l.Block, at);
+                g.CompositingMode = mode;
+                return at;
+            }
             using (ImageAttributes ia = new ImageAttributes())
             {
                 ColorMatrix cm = new ColorMatrix();
@@ -771,6 +779,16 @@ namespace ClaudeCurtain
                         }
                     }
                 }
+                // Kept premultiplied, the form GDI+ copies fastest: a whole block in about 2.5 ms instead of 6.6, the
+                // map's part of it in under 1 (the map's fades repaint just that part, 2026-11-23). Same pixels.
+                Bitmap fast = new Bitmap(L.Block.Width, L.Block.Height, PixelFormat.Format32bppPArgb);
+                using (Graphics copy = Graphics.FromImage(fast))
+                {
+                    copy.CompositingMode = CompositingMode.SourceCopy;
+                    copy.DrawImage(L.Block, new Rectangle(0, 0, fast.Width, fast.Height), 0, 0, fast.Width, fast.Height, GraphicsUnit.Pixel);
+                }
+                L.Block.Dispose();
+                L.Block = fast;
                 return L;
             }
             catch
@@ -1178,8 +1196,12 @@ namespace ClaudeCurtain
                         g.FillRectangle(mark, sx, (float)Math.Round(oy + l.MapRuleY) - 1, segW, 2);
                 }
             }
-            DrawPicture(g, MapArt.Shore(map, l.MapCrop, mw, mh), mx, my, show);
-            Bitmap overlay = MapArt.Overlay(map, l.MapCrop, mw, mh, l.MapOverlayKey, og => DrawMapOverlay(og, l, mw, mh));
+            // the shoreline and the overlay, kept as one picture: one draw a frame
+            Bitmap overlay = MapArt.Overlay(map, l.MapCrop, mw, mh, l.MapOverlayKey, og =>
+            {
+                og.DrawImageUnscaled(MapArt.Shore(map, l.MapCrop, mw, mh), 0, 0);
+                DrawMapOverlay(og, l, mw, mh);
+            });
             DrawPicture(g, overlay, mx, my, show);
             if (l.Detail.Width > 0 && map.Detail != null)
             {
@@ -1190,8 +1212,11 @@ namespace ClaudeCurtain
                 if (veil > 0.004f)
                     using (SolidBrush black = new SolidBrush(Color.FromArgb((int)Math.Round(255 * veil), 0, 0, 0)))
                         g.FillRectangle(black, dx, dy, dw, dh);
-                DrawPicture(g, MapArt.Shore(d, l.DetailCrop, dw, dh), dx, dy, show);
-                DrawPicture(g, MapArt.Overlay(d, l.DetailCrop, dw, dh, l.DetailOverlayKey, og => DrawDetailOverlay(og, l, dw, dh)), dx, dy, show);
+                DrawPicture(g, MapArt.Overlay(d, l.DetailCrop, dw, dh, l.DetailOverlayKey, og =>
+                {
+                    og.DrawImageUnscaled(MapArt.Shore(d, l.DetailCrop, dw, dh), 0, 0);
+                    DrawDetailOverlay(og, l, dw, dh);
+                }), dx, dy, show);
             }
             // at most one picture a frame, so a replay never waits: the map's, its fog's, then the close-up's
             bool warmed = fr.Length > 0 && MapArt.WarmOne(map, l.MapCrop, mw, mh, fr);

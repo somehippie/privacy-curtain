@@ -193,14 +193,14 @@ namespace ClaudeCurtain
         protected override void OnPaint(PaintEventArgs e)
         {
             Graphics g = e.Graphics;
-            g.Clear(Color.Black);
             try
             {
-                PaintTo(g, owner.Current, ClientSize.Width, ClientSize.Height);
+                PaintTo(g, owner.Current, ClientSize.Width, ClientSize.Height);   // the painter clears to black first
             }
             catch (Exception ex)
             {
                 // A drawing problem must never take the curtain down; it just stays black.
+                try { g.Clear(Color.Black); } catch { }
                 Log.WriteOnce("paint", "paint failed: " + ex.Message);
             }
         }
