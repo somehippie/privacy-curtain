@@ -89,7 +89,7 @@ namespace ClaudeCurtain
         /// <summary>
         /// A key pressed with nothing typed this soon before an entry's first digit belongs to the entry: the
         /// owner waking the screen first, as at Windows' lock screen (2026-11-22: nearly every unlock had one
-        /// such key, which then alerted the phone as "someone" at the keyboard). One key at most.
+        /// such key, which then raised an input alert as if someone were at the keyboard). One key at most.
         /// </summary>
         public const int WakeMs = 10000;
 
