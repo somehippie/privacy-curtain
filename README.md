@@ -158,7 +158,13 @@ totals as a table. It never takes focus and closes itself after 10 seconds. It s
 and the screen: a long summary first flows its table into more columns, then steps its text down, until it
 fits. `curtain-off.ps1` prints the same summary as text.
 
-![The "While you were away" window: 12 h 4 min, 11:44 PM to 11:49 AM, closed by PIN; a timeline with ticks; and a table of counts](docs/summary.png) The closing time is not shown on
+Its last line, **VIEW FULL LOG**, opens that session's record in Notepad: the summary, then every event
+that curtain logged with its time (the once-a-minute "nothing happened" lines counted rather than listed),
+then the alerts sent in that time. It is written to `local\last-session-log.txt`. Moving the pointer onto
+the window holds the countdown so there is time to reach the link; it starts again from 10 s when the
+pointer leaves. A window that opens under a resting pointer still closes on time.
+
+![The "While you were away" window: 12 h 4 min, 11:44 PM to 11:49 AM, closed by PIN; a timeline with ticks; a table of counts; and a VIEW FULL LOG link](docs/summary.png) The closing time is not shown on
 screen; `curtain-on.ps1` and `curtain-status.ps1` print it.
 
 **How long logs are kept.** By size, not by date, so they can never grow past a fixed amount. All of
@@ -169,7 +175,7 @@ them together stay under about 1.8 MB, and the weather map's files under another
 | `events.log` | 1 MB, trimmed to the newest 600 KB | about 10 days of round-the-clock curtain, far longer with normal use |
 | `curtain.log` (diagnostics) | 512 KB, trimmed to the newest 128 KB | weeks |
 | `alerts.log` | 256 KB, trimmed to the newest 160 KB | thousands of alerts |
-| `last-summary.txt`, `last-summary-timeline.txt`, `last-exit.json`, `weather.txt`, `weather-hourly.txt` | one small file each, overwritten (the timeline holds at most 5,000 moments, about 60 KB) | the last run only |
+| `last-summary.txt`, `last-summary-timeline.txt`, `last-session-log.txt` (written when VIEW FULL LOG is clicked), `last-exit.json`, `weather.txt`, `weather-hourly.txt` | one small file each, overwritten (the timeline holds at most 5,000 moments, about 60 KB) | the last run only |
 | `map.txt`, `map-base-*.png`, `map-water-*.png`, `map-waterfine-*.png`, `map-marsh-*.png`, `map-streams-*.png`, `radar-*.png`, `sat-*.jpg` (the weather map) | the last hour of pictures (about 8 radar, 7 satellite), one land and water map and one of rivers and lakes; older pictures are deleted at each refresh | the last hour |
 | `dem-*.png`, `tide-station.txt` (the map's relief and tide) | the elevation tiles over the map's area (about 7 MB) and one line naming the tide station, fetched once per place; tiles for another place are deleted | as long as the place stays the same |
 | `test\report-*.txt` | the 10 newest are kept | the last 10 test runs |

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Text;
@@ -70,6 +71,8 @@ namespace ClaudeCurtain
             StringBuilder sb = new StringBuilder();
             sb.Append("start\t").Append(startUtc.ToString("o", CultureInfo.InvariantCulture)).Append("\r\n");
             sb.Append("end\t").Append(endUtc.ToString("o", CultureInfo.InvariantCulture)).Append("\r\n");
+            // Which curtain this was, so "View full log" can pick this run's lines out of events.log.
+            sb.Append("pid\t").Append(runPid.ToString(CultureInfo.InvariantCulture)).Append("\r\n");
             lock (gate)
             {
                 foreach (KeyValuePair<DateTime, string> m in moments)
@@ -257,6 +260,13 @@ namespace ClaudeCurtain
         private float scale = 1f, trackPx;
         private int columns = 1;
         private int secondsLeft = 10;
+        private Item link;                 // "VIEW FULL LOG": opens this run's events in Notepad
+        private RectangleF linkHit;        // where a click counts as the link (a little larger than its text)
+        private bool held;                 // the pointer is over the window: the countdown waits
+        private readonly Point cursorAtOpen;
+
+        /// <summary>What "VIEW FULL LOG" does (Run sets it; previews and tests leave it null).</summary>
+        public Action ViewLog;
 
         public SummaryView(string text, List<KeyValuePair<double, string>> moments, double span, Size testScreen, double night)
         {
@@ -304,13 +314,13 @@ namespace ClaudeCurtain
             }
             if (!placed) { scale = 0.45f; columns = 1; Arrange(); }
 
-            EventHandler close = delegate { Close(); };
-            Click += close;
+            cursorAtOpen = Cursor.Position;
             KeyPreview = true;
             KeyDown += delegate { Close(); };
             timer.Interval = 1000;
             timer.Tick += delegate
             {
+                if (held) return;
                 secondsLeft--;
                 if (secondsLeft <= 0) { timer.Stop(); Close(); }
                 else { footer.Text = FooterText(); Invalidate(); }
@@ -320,7 +330,49 @@ namespace ClaudeCurtain
 
         protected override bool ShowWithoutActivation { get { return true; } }
 
-        private string FooterText() { return "CLOSES IN " + secondsLeft + " S   ·   CLICK OR PRESS A KEY TO CLOSE NOW"; }
+        private const string LinkText = "VIEW FULL LOG   →";
+        private const string HeldFooter ="WAITING WHILE THE POINTER IS HERE   ·   CLICK TO CLOSE";
+        private string FooterText()
+        {
+            return held ? HeldFooter : "CLOSES IN " + secondsLeft + " S   ·   CLICK OR PRESS A KEY TO CLOSE NOW";
+        }
+
+        private bool OverLink(Point p) { return link != null && ViewLog != null && linkHit.Contains(p); }
+
+        protected override void OnMouseMove(MouseEventArgs e)
+        {
+            // The countdown waits once the pointer is moved onto the window (a window that merely opens under a
+            // resting pointer still closes on time), so there is time to reach "VIEW FULL LOG".
+            if (!held && Cursor.Position != cursorAtOpen)
+            {
+                held = true;
+                footer.Text = FooterText();
+                Invalidate();
+            }
+            Cursor = OverLink(e.Location) ? Cursors.Hand : Cursors.Default;
+            base.OnMouseMove(e);
+        }
+
+        protected override void OnMouseLeave(EventArgs e)
+        {
+            if (held && !ClientRectangle.Contains(PointToClient(Cursor.Position)))
+            {
+                held = false;
+                secondsLeft = 10;
+                footer.Text = FooterText();
+                Invalidate();
+            }
+            base.OnMouseLeave(e);
+        }
+
+        protected override void OnMouseClick(MouseEventArgs e)
+        {
+            if (OverLink(e.Location))
+            {
+                try { ViewLog(); } catch (Exception ex) { Log.WriteOnce("summary-log", "view log failed: " + ex.Message); }
+            }
+            Close();
+        }
 
         private static Model Parse(string text)
         {
@@ -415,7 +467,8 @@ namespace ClaudeCurtain
                 contentW = Math.Max(contentW, columns * colW + (columns - 1) * colGap);
                 string foot = "CLOSES IN 10 S   ·   CLICK OR PRESS A KEY TO CLOSE NOW";
                 contentW = Math.Max(contentW, width(foot, fLabel, track));
-                if (model.Record.Length > 0) contentW = Math.Max(contentW, width(model.Record, fLabel, 0));
+                contentW = Math.Max(contentW, width(HeldFooter, fLabel, track));
+                if (model.Record.Length > 0) contentW = Math.Max(contentW, width(LinkText, fBody, track));
 
                 // The session timeline.
                 if (moments != null && span > 0)
@@ -468,12 +521,17 @@ namespace ClaudeCurtain
                     y = top + perColumn * pitch;
                 }
 
-                y += st(4.5) + fLabel.CapHeight;
+                link = null;
                 if (model.Record.Length > 0)
                 {
-                    Add(model.Record, fLabel, CurtainPainter.Tertiary, x, y, 0);
-                    y += st(5.5) + fLabel.CapHeight;
+                    // The summary's "Full record: scripts\curtain-log.ps1" line becomes a link to this run's log.
+                    y += st(4) + fBody.CapHeight;
+                    link = AddItem(LinkText, fBody, CurtainPainter.Accent, x, y, track);
+                    float lw = width(LinkText, fBody, track), slop = st(6);
+                    linkHit = new RectangleF(x - slop, y - fBody.CapHeight - slop, lw + 2 * slop, fBody.CapHeight + 2 * slop);
+                    y += st(4.5) + fLabel.CapHeight;
                 }
+                else y += st(4.5) + fLabel.CapHeight;
                 footer = AddItem(FooterText(), fLabel, CurtainPainter.Tertiary, x, y, track);
                 y += fLabel.Font.Size * 0.4f + pad;
 
@@ -589,6 +647,96 @@ namespace ClaudeCurtain
             catch { return null; }
         }
 
+        /// <summary>
+        /// The run behind the last summary, as text to read: the summary, then every event that curtain logged
+        /// (oldest first, the once-a-minute "nothing happened" heartbeats counted rather than listed), then the
+        /// alerts sent in that time. Counts and kinds only, as in events.log: never which keys were pressed.
+        /// </summary>
+        internal static string BuildSessionLog(string summary, string eventsFile, string alertsFile, string timelineFile)
+        {
+            DateTime start = DateTime.MinValue, end = DateTime.MaxValue;
+            string pid = null;
+            try
+            {
+                foreach (string raw in File.ReadAllLines(timelineFile, Encoding.UTF8))
+                {
+                    string[] p = raw.Split('\t');
+                    if (p.Length < 2) continue;
+                    if (p[0] == "start") DateTime.TryParse(p[1], CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out start);
+                    else if (p[0] == "end") DateTime.TryParse(p[1], CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out end);
+                    else if (p[0] == "pid") pid = p[1].Trim();
+                }
+            }
+            catch { }
+            // events.log and alerts.log are in local time to the second; allow a little either side.
+            DateTime from = start == DateTime.MinValue ? DateTime.MinValue : start.ToLocalTime().AddSeconds(-2);
+            DateTime to = end == DateTime.MaxValue ? DateTime.MaxValue : end.ToLocalTime().AddSeconds(2);
+
+            StringBuilder sb = new StringBuilder();
+            foreach (string line in (summary ?? "").Replace("\r", "").TrimEnd().Split('\n'))
+                if (!line.StartsWith("Full record", StringComparison.OrdinalIgnoreCase)) sb.Append(line).Append("\r\n");
+            sb.Append("\r\n");
+
+            List<string> events = new List<string>();
+            int heartbeats = 0;
+            foreach (string[] p in ReadTabbed(eventsFile, 4))
+            {
+                DateTime t;
+                if (!TryLocal(p[0], out t)) continue;
+                if (pid != null ? p[1] != pid : (t < from || t > to)) continue;
+                if (p[2] == "heartbeat") { heartbeats++; continue; }
+                events.Add(Stamp(t) + "   " + p[2].PadRight(16) + p[3]);
+            }
+            sb.Append("EVERYTHING THIS CURTAIN LOGGED, OLDEST FIRST\r\n");
+            if (heartbeats > 0) sb.Append("(" + heartbeats + " once-a-minute \"curtain up, no physical input\" lines left out)\r\n");
+            sb.Append("\r\n");
+            if (events.Count == 0) sb.Append("Nothing was found for this curtain in events.log (it may have been trimmed).\r\n");
+            foreach (string line in events) sb.Append(line).Append("\r\n");
+
+            List<string> alerts = new List<string>();
+            foreach (string[] p in ReadTabbed(alertsFile, 4))
+            {
+                DateTime t;
+                if (!TryLocal(p[0], out t) || t < from || t > to) continue;
+                alerts.Add(Stamp(t) + "   " + p[1].PadRight(16) + p[3]);
+            }
+            if (alerts.Count > 0)
+            {
+                sb.Append("\r\nALERTS IN THAT TIME (alert: sent to the phone; collapsed: held back as a repeat)\r\n\r\n");
+                foreach (string line in alerts) sb.Append(line).Append("\r\n");
+            }
+            sb.Append("\r\nOlder curtains: scripts\\curtain-log.ps1. This file is rewritten each time VIEW FULL LOG is clicked.\r\n");
+            return sb.ToString();
+        }
+
+        private static IEnumerable<string[]> ReadTabbed(string file, int fields)
+        {
+            string[] lines;
+            try
+            {
+                using (FileStream fs = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (StreamReader reader = new StreamReader(fs, Encoding.UTF8))
+                    lines = reader.ReadToEnd().Split('\n');
+            }
+            catch { yield break; }
+            foreach (string raw in lines)
+            {
+                string[] p = raw.TrimEnd('\r').Split(new[] { '\t' }, fields);
+                if (p.Length == fields) yield return p;
+            }
+        }
+
+        private static bool TryLocal(string text, out DateTime t)
+        {
+            return DateTime.TryParseExact(text, "yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture, DateTimeStyles.AssumeLocal, out t);
+        }
+
+        private static string Stamp(DateTime t)
+        {
+            return t.ToString("ddd MMM d", CultureInfo.CurrentCulture).PadRight(10) + " " +
+                   t.ToString("h:mm:ss tt", CultureInfo.CurrentCulture).PadLeft(11);
+        }
+
         internal static Size ParseScreen(string text)
         {
             if (string.IsNullOrEmpty(text)) return Size.Empty;
@@ -615,6 +763,15 @@ namespace ClaudeCurtain
             Application.EnableVisualStyles();
             using (SummaryView view = new SummaryView(text, moments, span, testScreen, CurtainPainter.NightFactor(DateTime.Now)))
             {
+                string summaryText = text;
+                view.ViewLog = delegate
+                {
+                    string file = Path.Combine(o.LocalDir, "last-session-log.txt");
+                    File.WriteAllText(file, BuildSessionLog(summaryText, o.EventsFile, o.AlertsFile, o.TimelineFile), Encoding.UTF8);
+                    ProcessStartInfo psi = new ProcessStartInfo("notepad.exe", "\"" + file + "\"");
+                    psi.UseShellExecute = false;
+                    Process.Start(psi);
+                };
                 if (!string.IsNullOrEmpty(o.OutFile))
                 {
                     SummaryView shown = view;
