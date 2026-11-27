@@ -31,6 +31,7 @@ namespace ClaudeCurtain
 
         // Tallies for the "While you were away" summary of this run.
         public static int WrongPin;
+        public static int Attempts;     // "someone tried the PC" alerts (AttemptWatch)
         public static long KeyPresses;
         public static long Clicks;
         public static int InputMinutes;
@@ -59,7 +60,7 @@ namespace ClaudeCurtain
         {
             switch (kind)
             {
-                case "input": case "wrong-pin": case "taskmgr": case "admin-window": case "lock": case "remote": return true;
+                case "input": case "wrong-pin": case "attempt": case "taskmgr": case "admin-window": case "lock": case "remote": return true;
                 case "security-screen": return text.IndexOf("opened", StringComparison.OrdinalIgnoreCase) >= 0;
                 default: return false;
             }
@@ -175,7 +176,7 @@ namespace ClaudeCurtain
         /// <summary>A one-line tally of what happened this run, for the "all clear" alert.</summary>
         public static string CountsLine()
         {
-            return "Security screen " + SecurityScreen + ", Task Manager " + TaskManager + ", admin windows " + AdminFocus +
+            return "Tried the PC " + Attempts + ", security screen " + SecurityScreen + ", Task Manager " + TaskManager + ", admin windows " + AdminFocus +
                    ", blocked keys " + KeyPresses + ", mouse clicks " + Clicks + ", wrong PINs " + WrongPin +
                    ", locks " + Locks + ", Remote Desktop " + RemoteConnects + ".";
         }
@@ -192,6 +193,7 @@ namespace ClaudeCurtain
         {
             DateTime now = DateTime.Now;
             List<string> items = new List<string>();
+            if (Attempts > 0) items.Add("Someone tried the PC and did not unlock it: " + Attempts + (Attempts == 1 ? " time" : " times"));
             if (WrongPin > 0) items.Add("Wrong PIN attempts: " + WrongPin);
             if (KeyPresses > 0) items.Add("Keyboard: " + KeyPresses + " key presses blocked");
             if (Clicks > 0 || MouseMoved)
@@ -702,7 +704,7 @@ namespace ClaudeCurtain
             }
             if (alerts.Count > 0)
             {
-                sb.Append("\r\nALERTS IN THAT TIME (alert: sent to the phone; collapsed: held back as a repeat)\r\n\r\n");
+                sb.Append("\r\nALERTS IN THAT TIME (alert: sent to the phone; collapsed: held back as a repeat; logged: recorded only)\r\n\r\n");
                 foreach (string line in alerts) sb.Append(line).Append("\r\n");
             }
             sb.Append("\r\nOlder curtains: scripts\\curtain-log.ps1. This file is rewritten each time VIEW FULL LOG is clicked.\r\n");

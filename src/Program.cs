@@ -69,6 +69,9 @@ namespace ClaudeCurtain
         // (alerts are still logged). Null means "resolve the default under the user's .claude\hooks".
         public string NotifyHook;
 
+        // Blocked key presses or clicks followed by this long without an unlock: "someone tried the PC" (AttemptWatch).
+        public int AttemptSeconds = AttemptWatch.DefaultWindowMs / 1000;
+
         public string LogFile { get { return Path.Combine(LocalDir, "curtain.log"); } }
         public string StateFile { get { return Path.Combine(LocalDir, "state.json"); } }
         public string LastExitFile { get { return Path.Combine(LocalDir, "last-exit.json"); } }
@@ -77,18 +80,40 @@ namespace ClaudeCurtain
         public string TimelineFile { get { return Path.Combine(LocalDir, "last-summary-timeline.txt"); } }
         public string AlertsFile { get { return Path.Combine(LocalDir, "alerts.log"); } }
 
-        /// <summary>The notify hook to actually use: the explicit one, the default, or null (log only).</summary>
+        /// <summary>
+        /// The notify hook to actually use: the explicit one; else the built-in phone alerts
+        /// (scripts\curtain-ntfy.ps1) when config.json names an ntfy topic; else the default; or null (log only).
+        /// </summary>
         public string ResolveNotifyHook()
         {
             string hook = NotifyHook;
             if (hook == null)
             {
+                try
+                {
+                    string root = Path.GetDirectoryName(Path.GetDirectoryName(ExePath));   // ...\bin\x.exe -> the folder above bin
+                    string script = Path.Combine(root, "scripts", "curtain-ntfy.ps1");
+                    string config = Path.Combine(root, "config.json");
+                    if (File.Exists(script) && File.Exists(config) && NtfyConfigured(File.ReadAllText(config))) return script;
+                }
+                catch { }
                 string home = Environment.GetEnvironmentVariable("USERPROFILE");
                 if (string.IsNullOrEmpty(home)) return null;
                 hook = Path.Combine(home, ".claude", "hooks", "notify.ps1");
             }
             if (hook == "" || string.Equals(hook, "none", StringComparison.OrdinalIgnoreCase)) return null;
             return hook;
+        }
+
+        /// <summary>True when a config.json text has "ntfy": { ... "topic": "&lt;something&gt;" ... } and does not turn it off.</summary>
+        internal static bool NtfyConfigured(string json)
+        {
+            if (string.IsNullOrEmpty(json)) return false;
+            System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(json, "\"ntfy\"\\s*:\\s*\\{(?<body>[^}]*)\\}");
+            if (!m.Success) return false;
+            string body = m.Groups["body"].Value;
+            if (System.Text.RegularExpressions.Regex.IsMatch(body, "\"enabled\"\\s*:\\s*false")) return false;
+            return System.Text.RegularExpressions.Regex.IsMatch(body, "\"topic\"\\s*:\\s*\"[^\"\\s]+\"");
         }
 
         public static string ExePath { get { return Assembly.GetExecutingAssembly().Location; } }
@@ -137,6 +162,7 @@ namespace ClaudeCurtain
                         case "--wake-minutes": o.WakeMinutes = Math.Max(0.1, double.Parse(Next(args, ref i), CultureInfo.InvariantCulture)); break;
                         case "--render-drift": o.Mode = Mode.Preview; o.PreviewDrift = true; o.PreviewFile = Next(args, ref i); break;
                         case "--notify-hook": o.NotifyHook = Next(args, ref i); break;
+                        case "--attempt-seconds": o.AttemptSeconds = Math.Max(1, int.Parse(Next(args, ref i), CultureInfo.InvariantCulture)); break;
                         default:
                             if (o.Error == null) o.Error = "unknown argument: " + a;
                             break;

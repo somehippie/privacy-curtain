@@ -1,6 +1,10 @@
 {
-  "_comment": "Copy this file to config.json (which is gitignored) and set your location. 'grid' is your US National Weather Service forecast cell as gridId/gridX,gridY. Find it at https://api.weather.gov/points/<lat>,<lon> (read gridId, gridX, gridY). 'place' is just the label shown on screen. Leave 'grid' empty to show no forecast. 'wuApiKey' is where a paid Weather Underground v3 forecast key would go; it is not used yet.",
+  "_comment": "Copy this file to config.json (which is gitignored) and set your location. 'grid' is your US National Weather Service forecast cell as gridId/gridX,gridY. Find it at https://api.weather.gov/points/<lat>,<lon> (read gridId, gridX, gridY). 'place' is just the label shown on screen. Leave 'grid' empty to show no forecast. 'wuApiKey' is where a paid Weather Underground v3 forecast key would go; it is not used yet. 'ntfy' turns on phone alerts: run scripts\\curtain-ntfy.ps1 -Setup to fill in a random topic, then subscribe to it in the ntfy app (see the README). Leave 'topic' empty for no phone alerts.",
   "grid": "",
   "place": "Your City",
-  "wuApiKey": ""
+  "wuApiKey": "",
+  "ntfy": {
+    "server": "https://ntfy.sh",
+    "topic": ""
+  }
 }

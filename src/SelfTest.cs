@@ -22,6 +22,8 @@ namespace ClaudeCurtain
                 TestRest(o);
                 TestKeyQueue();
                 TestAlerter(o);
+                TestAttemptWatch();
+                TestNtfyConfig();
                 TestSysStats(o);
                 TestPainter(o);
                 TestMedia();
@@ -447,6 +449,72 @@ namespace ClaudeCurtain
             Check("queue: overflow drops keys instead of failing", count == 255);
             q.Push(7);
             Check("queue: usable after overflow", q.TryPop(out code) && code == 7);
+        }
+
+        private static void TestNtfyConfig()
+        {
+            Check("ntfy: a config with a topic turns phone alerts on",
+                  Options.NtfyConfigured("{ \"place\": \"X\", \"ntfy\": { \"server\": \"https://ntfy.sh\", \"topic\": \"curtain-abc123\" } }"));
+            Check("ntfy: an empty topic leaves them off", !Options.NtfyConfigured("{ \"ntfy\": { \"topic\": \"\" } }"));
+            Check("ntfy: \"enabled\": false leaves them off",
+                  !Options.NtfyConfigured("{ \"ntfy\": { \"enabled\": false, \"topic\": \"curtain-abc123\" } }"));
+            Check("ntfy: no ntfy section leaves them off", !Options.NtfyConfigured("{ \"grid\": \"\", \"place\": \"Your City\" }"));
+        }
+
+        private static void TestAttemptWatch()
+        {
+            const long W = AttemptWatch.DefaultWindowMs;
+            // Feeds (time ms, keys total, clicks total) and reports the times at which it alerted.
+            Func<long[][], List<long>> run = steps =>
+            {
+                AttemptWatch w = new AttemptWatch(W);
+                List<long> fired = new List<long>();
+                long t = 0, k = 0, c = 0;
+                int next = 0;
+                for (t = 0; t <= 6 * W; t += 1000)
+                {
+                    while (next < steps.Length && steps[next][0] <= t) { k = steps[next][1]; c = steps[next][2]; next++; }
+                    if (w.Update(k, c, t)) fired.Add(t);
+                }
+                return fired;
+            };
+
+            List<long> f = run(new[] { new long[] { 5000, 1, 0 } });
+            Check("attempt watch: one key to wake the screen, then nothing, never alerts", f.Count == 0);
+
+            f = run(new long[0][]);
+            Check("attempt watch: mouse movement alone (no presses) never alerts", f.Count == 0);
+
+            f = run(new[] { new long[] { 5000, 1, 0 }, new long[] { 7000, 3, 0 }, new long[] { 9000, 4, 0 } });
+            Check("attempt watch: a few keys and no unlock alerts once, a minute after the first key",
+                  f.Count == 1 && f[0] == 5000 + W);
+
+            f = run(new[] { new long[] { 5000, 1, 0 }, new long[] { 6000, 1, 1 } });
+            Check("attempt watch: a key and a click count together (2 presses)", f.Count == 1);
+
+            // A wake key, then the PIN typed just before the minute is up: the alert waits until the keys
+            // have been quiet for SettleMs, so an unlock (which ends the curtain) always comes first.
+            f = run(new[] { new long[] { 5000, 1, 0 }, new long[] { 60000, 3, 0 }, new long[] { 63000, 6, 0 } });
+            Check("attempt watch: keys still coming in at the minute hold the alert until they settle",
+                  f.Count == 1 && f[0] == 63000 + AttemptWatch.SettleMs);
+
+            // A wake key, a look at the forecast for over a minute, then a key again: two quiet episodes.
+            f = run(new[] { new long[] { 5000, 1, 0 }, new long[] { 5000 + W + 20000, 2, 0 } });
+            Check("attempt watch: two lone keys more than a minute apart never alert", f.Count == 0);
+
+            // Someone typing a key every 5 s without pause: alerts by twice the window, then again later.
+            List<long[]> steady = new List<long[]>();
+            for (long t = 5000, k = 1; t < 6 * W; t += 5000, k++) steady.Add(new long[] { t, k, 0 });
+            f = run(steady.ToArray());
+            Check("attempt watch: steady typing that never pauses still alerts within two minutes",
+                  f.Count >= 1 && f[0] <= 5000 + 2 * W);
+            Check("attempt watch: and alerts at most once per episode (no flood)", f.Count <= 4);
+
+            AttemptWatch d = new AttemptWatch(W);
+            d.Update(0, 0, 0); d.Update(4, 1, 1000);
+            bool fired2 = false;
+            for (long t = 2000; t <= 2 * W && !fired2; t += 1000) fired2 = d.Update(4, 1, t);
+            Check("attempt watch: the alert reports the episode's keys and clicks", fired2 && d.Keys == 4 && d.Clicks == 1);
         }
 
         private static void TestAlerter(Options o)

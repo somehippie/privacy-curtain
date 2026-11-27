@@ -144,6 +144,7 @@ namespace ClaudeCurtain
                 hookPath = null;
             }
             alerter = new Alerter(hookPath, o.AlertsFile, "curtain");
+            attempts = new AttemptWatch(o.AttemptSeconds * 1000L);
 
             queue = new KeyQueue();
             gate = new PinGate(new Func<string, bool>(pinStore.Verify));
@@ -393,6 +394,16 @@ namespace ClaudeCurtain
                         lastMinute = minute;
                         FlushInputCounts(true);
                     }
+                    // Someone tried the PC: blocked key presses or clicks, then a minute without an unlock.
+                    if (attempts != null && attempts.Update(hooks.KeyPresses, hooks.ButtonPresses, now))
+                    {
+                        string tried = attempts.Keys + " key press" + (attempts.Keys == 1 ? "" : "es") + ", " +
+                                       attempts.Clicks + " mouse click" + (attempts.Clicks == 1 ? "" : "s") +
+                                       ", and no unlock within " + EventLog.Span(attempts.LastedMs / 1000.0);
+                        EventLog.Attempts++;
+                        EventLog.Write("attempt", "someone tried to use the PC: " + tried);
+                        RaiseAlert("attempt", "someone tried to use the PC: " + tried);
+                    }
                     if (hooks.Faulted)
                     {
                         ExitNow("hook-fault", ExitCode.HookFault);
@@ -490,6 +501,7 @@ namespace ClaudeCurtain
         private static long countedKeys;
         private static long countedClicks;
         private static long countedMoves;
+        private static AttemptWatch attempts;
         private static long excludedKeys;   // key presses of the unlocking PIN entry, set just before the last flush
 
         private static bool IsCleanClose(string reason)
@@ -532,10 +544,10 @@ namespace ClaudeCurtain
                 EventLog.InputMinutes++;
                 string what = dk + " key presses, " + dc + " mouse clicks" + (dm > 0 ? ", mouse moved" : "");
                 EventLog.Write("input", "physical input blocked in the last minute: " + what);
-                // Awareness: ping the phone that someone is using the blocked keyboard or mouse. The Alerter
-                // collapses repeats of this kind within 30 s, so a burst is one ping; sustained use across
-                // minutes pings again each minute. Log-only and harmless when no notify hook is configured.
-                RaiseAlert("input", "someone is using the blocked keyboard or mouse (" + what + " in the last minute)");
+                // Recorded in alerts.log but not sent: a single key to wake the screen, or keys typed on the way
+                // to an unlock, are the owner's. The phone hears about blocked input through AttemptWatch instead.
+                Alerter a = alerter;
+                if (a != null) a.Note("input", "blocked keyboard or mouse use (" + what + " in the last minute)");
             }
             else if (heartbeat)
             {

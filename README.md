@@ -175,6 +175,7 @@ them together stay under about 1.8 MB, and the weather map's files under another
 | `events.log` | 1 MB, trimmed to the newest 600 KB | about 10 days of round-the-clock curtain, far longer with normal use |
 | `curtain.log` (diagnostics) | 512 KB, trimmed to the newest 128 KB | weeks |
 | `alerts.log` | 256 KB, trimmed to the newest 160 KB | thousands of alerts |
+| `ntfy.log` (only with phone alerts on) | 64 KB, trimmed to the newest 200 sends | hundreds of sends |
 | `last-summary.txt`, `last-summary-timeline.txt`, `last-session-log.txt` (written when VIEW FULL LOG is clicked), `last-exit.json`, `weather.txt`, `weather-hourly.txt` | one small file each, overwritten (the timeline holds at most 5,000 moments, about 60 KB) | the last run only |
 | `map.txt`, `map-base-*.png`, `map-water-*.png`, `map-waterfine-*.png`, `map-marsh-*.png`, `map-streams-*.png`, `radar-*.png`, `sat-*.jpg` (the weather map) | the last hour of pictures (about 8 radar, 7 satellite), one land and water map and one of rivers and lakes; older pictures are deleted at each refresh | the last hour |
 | `dem-*.png`, `tide-station.txt` (the map's relief and tide) | the elevation tiles over the map's area (about 7 MB) and one line naming the tide station, fetched once per place; tiles for another place are deleted | as long as the place stays the same |
@@ -192,15 +193,40 @@ The curtain can make interference *visible* without blocking anything. It sends 
 external notify hook (a PowerShell script you point it at, for example one that pushes to your phone), on
 top of the event-log line, and records it in `local\alerts.log`, when:
 
-- **someone uses the blocked keyboard or mouse.** The alert says how many key presses and clicks were
-  blocked in the last minute (counts only, never which keys). Sustained use pings again each minute.
+- **someone tried the PC**: blocked key presses or clicks, then a minute without an unlock. The first
+  blocked press starts the minute; when it is up, nothing has been pressed for 10 seconds, and the curtain
+  is still up, one alert goes out if there were 2 or more presses, for example "5 key presses, 1 mouse
+  click, and no unlock within 1 min 10 s" (counts only, never which keys). So one key pressed to wake the
+  screen and look at it never alerts, and neither do keys typed on the way to your own unlock: unlocking
+  ends the curtain first. Mouse movement never counts. Someone typing without a pause still sets it off
+  within two minutes. Change the minute with `--attempt-seconds`.
 - **the Windows security screen opens** (Ctrl+Alt+Del, the lock screen or an administrator prompt).
 - **Task Manager comes to the front**, or **an administrator window takes focus**.
 
+### Phone alerts with ntfy
+
+[ntfy](https://ntfy.sh) pushes the alerts to your phone. It is free, needs no account, and installs
+nothing on the PC.
+
+1. Run `.\scripts\curtain-ntfy.ps1 -Setup`. It adds an `ntfy` section with a long random topic to
+   `config.json` (making `config.json` from `config.example.json` if you have none) and prints the topic.
+2. Install the ntfy app (Android or iOS), tap **+**, and subscribe to that topic on `ntfy.sh`.
+3. Run `.\scripts\curtain-ntfy.ps1 -Test`. A test message should arrive.
+
+From then on every curtain sends its alerts there. "Someone tried the PC" and the security screen, Task
+Manager and administrator-window alerts arrive as high priority (with sound); the all-clear when the
+curtain closes arrives silently. Anyone who knows the topic can read the alerts, so keep it private.
+Turn alerts off with `"enabled": false` in the `ntfy` section, or point `"server"` at your own ntfy server.
+Each send is recorded in `local\ntfy.log`.
+
 Details:
 
-- The hook is optional. With none configured, alerts are logged only. Point it at your own script with
-  `--notify-hook` (the default looks for `%USERPROFILE%\.claude\hooks\notify.ps1` and is skipped if absent).
+- The hook is optional. With none configured, alerts are logged only. With an ntfy topic in
+  `config.json`, the default hook is `scripts\curtain-ntfy.ps1`; otherwise it looks for
+  `%USERPROFILE%\.claude\hooks\notify.ps1` and is skipped if absent. Point it at your own script with
+  `--notify-hook`; the curtain sends it `{"message": "..."}` on standard input.
+- Each minute with blocked keyboard or mouse use is still written to `events.log`, and to `alerts.log`
+  tagged `logged`, but is not sent. The "While you were away" summary counts the times someone tried the PC.
 - Repeat alerts of the same kind within 30 seconds collapse into one; the event log still counts every
   repeat. One "all clear" with the totals is sent when the curtain closes cleanly (PIN, `curtain-off`,
   timer, Windows shutdown). After the security screen closes, the curtain re-asserts itself to
