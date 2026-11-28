@@ -19,48 +19,60 @@ namespace ClaudeCurtain
         private readonly Button save = new Button();
         private readonly System.Windows.Forms.Timer closeTimer = new System.Windows.Forms.Timer();
         private bool saved;
+        private readonly float scale = 1f;
+
+        private int Px(int v) { return (int)Math.Round(v * scale); }
+
+        private void Place(Control c, int x, int y, int w, int h)
+        {
+            c.SetBounds(Px(x), Px(y), Px(w), Px(h));
+        }
 
         public SetPinDialog(string pinFile)
         {
             this.pinFile = pinFile;
 
             SuspendLayout();
-            AutoScaleDimensions = new SizeF(96F, 96F);
-            AutoScaleMode = AutoScaleMode.Dpi;
+            // Scale the layout ourselves from the screen's DPI. WinForms' own AutoScaleMode.Dpi, in this
+            // per-monitor-aware process, scaled the labels twice at 150% (2.25x) but the text boxes once,
+            // so the intro label covered the New PIN box. The font is in points, so it scales on its own.
+            AutoScaleMode = AutoScaleMode.None;
+            // The screen's DPI, read without creating this form's handle (which would lose CenterScreen).
+            using (Graphics g = Graphics.FromHwnd(IntPtr.Zero)) scale = g.DpiX / 96f;
             Text = "Claude curtain - set unlock PIN";
             Font = new Font("Segoe UI", 9.75f);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(460, 286);
+            ClientSize = new Size(Px(460), Px(286));
             TopMost = true;
 
             Label intro = new Label();
-            intro.SetBounds(18, 14, 424, 66);
+            Place(intro, 18, 14, 424, 66);
             intro.Text = "Choose the PIN that unlocks the privacy curtain from this keyboard.\r\n" +
                          PinStore.MinLength + " to " + PinStore.MaxLength + " digits. " +
                          "Do not reuse a PIN you use anywhere else.";
 
             Label label1 = new Label();
-            label1.SetBounds(18, 92, 110, 24);
+            Place(label1, 18, 92, 110, 24);
             label1.Text = "New PIN";
             pin1.Name = "pin1";
-            pin1.SetBounds(134, 89, 190, 26);
+            Place(pin1, 134, 89, 190, 26);
             pin1.UseSystemPasswordChar = true;
             pin1.MaxLength = PinStore.MaxLength;
             pin1.KeyPress += DigitsOnly;
 
             Label label2 = new Label();
-            label2.SetBounds(18, 128, 110, 24);
+            Place(label2, 18, 128, 110, 24);
             label2.Text = "Repeat PIN";
             pin2.Name = "pin2";
-            pin2.SetBounds(134, 125, 190, 26);
+            Place(pin2, 134, 125, 190, 26);
             pin2.UseSystemPasswordChar = true;
             pin2.MaxLength = PinStore.MaxLength;
             pin2.KeyPress += DigitsOnly;
 
-            status.SetBounds(18, 162, 424, 40);
+            Place(status, 18, 162, 424, 40);
             status.ForeColor = Color.Firebrick;
             if (File.Exists(pinFile))
             {
@@ -69,19 +81,19 @@ namespace ClaudeCurtain
             }
 
             Label note = new Label();
-            note.SetBounds(18, 206, 424, 22);
+            Place(note, 18, 206, 424, 22);
             note.ForeColor = Color.DimGray;
             note.Text = "Only a salted hash is stored, in the tool's local folder.";
 
             save.Name = "save";
             save.Text = "Save PIN";
-            save.SetBounds(232, 238, 100, 32);
+            Place(save, 232, 238, 100, 32);
             save.Click += OnSave;
 
             Button cancel = new Button();
             cancel.Name = "cancel";
             cancel.Text = "Cancel";
-            cancel.SetBounds(342, 238, 100, 32);
+            Place(cancel, 342, 238, 100, 32);
             cancel.Click += delegate { Close(); };
 
             AcceptButton = save;
